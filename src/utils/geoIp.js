@@ -85,7 +85,7 @@ export const getIpLocation = async (
     } catch (error) {
         console.error(
             "IP geolocation lookup failed:",
-            error.message
+            error
         );
 
         return null;

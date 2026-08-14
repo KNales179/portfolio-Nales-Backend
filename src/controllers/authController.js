@@ -489,6 +489,18 @@ export const login = async (req, res) => {
     const ipLocation =
       await getIpLocation(req.ip);
 
+    console.log("===== GEOIP DEBUG =====");
+    console.log("req.ip:", req.ip);
+    console.log(
+      "x-forwarded-for:",
+      req.get("x-forwarded-for")
+    );
+    console.log(
+      "socket remote address:",
+      req.socket.remoteAddress
+    );
+    console.log("======================");
+
     const session = await AdminSession.create({
       admin: admin._id,
 
@@ -788,6 +800,18 @@ export const verifyLoginTwoFactor = async (
 
     const ipLocation =
       await getIpLocation(req.ip);
+
+    console.log("===== GEOIP DEBUG =====");
+    console.log("req.ip:", req.ip);
+    console.log(
+      "x-forwarded-for:",
+      req.get("x-forwarded-for")
+    );
+    console.log(
+      "socket remote address:",
+      req.socket.remoteAddress
+    );
+    console.log("======================");
 
     const session =
       await AdminSession.create({
