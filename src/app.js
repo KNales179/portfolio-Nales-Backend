@@ -7,9 +7,9 @@ import heroRoutes from "./routes/heroRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
 
 const app = express();
+
 app.set("trust proxy", true);
-const ipLocation =
-    await getIpLocation(req.ip);
+
 app.use(
   cors({
     origin: true,
@@ -19,7 +19,11 @@ app.use(
 
 app.use(express.json());
 
-app.use(express.urlencoded({ extended: true }));
+app.use(
+  express.urlencoded({
+    extended: true,
+  })
+);
 
 app.get("/api/health", (req, res) => {
   res.json({
