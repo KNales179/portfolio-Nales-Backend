@@ -45,6 +45,43 @@ const adminSessionSchema = new mongoose.Schema(
             default: null,
         },
 
+        location: {
+            country: {
+                type: String,
+                default: null,
+            },
+
+            countryCode: {
+                type: String,
+                default: null,
+            },
+
+            region: {
+                type: String,
+                default: null,
+            },
+
+            city: {
+                type: String,
+                default: null,
+            },
+
+            latitude: {
+                type: Number,
+                default: null,
+            },
+
+            longitude: {
+                type: Number,
+                default: null,
+            },
+
+            accuracyRadius: {
+                type: Number,
+                default: null,
+            },
+        },
+
         userAgent: {
             type: String,
             default: null,

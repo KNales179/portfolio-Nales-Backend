@@ -5,6 +5,9 @@ import AuditLog from "../models/AuditLog.js";
 import AdminSession from "../models/AdminSession.js";
 import generateToken from "../utils/generateToken.js";
 import crypto from "crypto";
+import {
+  getIpLocation,
+} from "../utils/geoIp.js";
 
 import {
   generateSecret,
@@ -483,6 +486,9 @@ export const login = async (req, res) => {
       req.get("user-agent") ||
       "Unknown User Agent";
 
+    const ipLocation =
+      await getIpLocation(req.ip);
+
     const session = await AdminSession.create({
       admin: admin._id,
 
@@ -503,6 +509,8 @@ export const login = async (req, res) => {
         "Unknown OS",
 
       ipAddress: req.ip,
+
+      location: ipLocation,
 
       userAgent,
 
@@ -777,6 +785,9 @@ export const verifyLoginTwoFactor = async (
     const userAgent =
       req.get("user-agent") ||
       "Unknown User Agent";
+
+    const ipLocation =
+      await getIpLocation(req.ip);
 
     const session =
       await AdminSession.create({
