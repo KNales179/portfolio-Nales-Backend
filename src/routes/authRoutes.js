@@ -12,6 +12,11 @@ import {
 } from "../controllers/authController.js";
 
 import { protect } from "../middleware/authMiddleware.js";
+import {
+    loginRateLimiter,
+    twoFactorRateLimiter,
+    passwordResetRateLimiter,
+} from "../middleware/rateLimitMiddleware.js";
 
 const router = express.Router();
 
@@ -30,6 +35,7 @@ router.post(
 
 router.post(
     "/login",
+    loginRateLimiter,
     login
 );
 
@@ -45,6 +51,7 @@ router.post(
 
 router.post(
     "/login/2fa",
+    twoFactorRateLimiter,
     verifyLoginTwoFactor
 );
 
@@ -64,12 +71,14 @@ router.post(
 router.post(
     "/2fa/enable",
     protect,
+    twoFactorRateLimiter,
     enableTwoFactor
 );
 
 router.post(
     "/2fa/disable",
     protect,
+    twoFactorRateLimiter,
     disableTwoFactor
 );
 

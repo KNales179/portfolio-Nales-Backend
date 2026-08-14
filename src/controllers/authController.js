@@ -1087,12 +1087,12 @@ export const disableTwoFactor = async (
       success: true,
 
       message:
-        "Two-factor authentication enabled successfully",
+        "Two-factor authentication disabled successfully",
 
       data: {
         admin: getAdminResponse(admin),
 
-        twoFactorEnabled: true,
+        twoFactorEnabled: false,
       },
     });
   } catch (error) {

@@ -17,6 +17,9 @@ import {
 
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
+import {
+    passwordResetRateLimiter,
+} from "../middleware/rateLimitMiddleware.js";
 
 const router = express.Router();
 
@@ -111,7 +114,8 @@ router.delete(
 router.post(
     "/password/reset-2fa",
     protect,
-    resetPasswordWithTwoFactor
+    passwordResetRateLimiter,
+    resetPasswordWithTwoFactor,
 );
 
 export default router;
