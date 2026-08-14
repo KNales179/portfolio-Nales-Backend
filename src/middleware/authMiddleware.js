@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
 import Admin from "../models/Admin.js";
+import AdminSession from "../models/AdminSession.js";
 
 export const protect = async (req, res, next) => {
     try {
@@ -40,12 +41,63 @@ export const protect = async (req, res, next) => {
             });
         }
 
+        if (!decoded.sessionId) {
+            return res.status(401).json({
+                success: false,
+                message:
+                    "Authentication session is invalid",
+            });
+        }
+
+        const session =
+            await AdminSession.findOne({
+                sessionId: decoded.sessionId,
+                admin: decoded.id,
+            });
+
+        if (!session) {
+            return res.status(401).json({
+                success: false,
+                message:
+                    "Authentication session not found",
+            });
+        }
+
+        if (session.revokedAt) {
+            return res.status(401).json({
+                success: false,
+                message:
+                    "Authentication session has been revoked",
+            });
+        }
+
+        if (
+            session.expiresAt &&
+            session.expiresAt <= new Date()
+        ) {
+            return res.status(401).json({
+                success: false,
+                message:
+                    "Authentication session has expired",
+            });
+        }
+
         const admin = await Admin.findById(decoded.id);
 
         if (!admin) {
             return res.status(401).json({
                 success: false,
                 message: "Admin account no longer exists",
+            });
+        }
+
+        if (
+            decoded.tokenVersion !==
+            (admin.tokenVersion || 0)
+        ) {
+            return res.status(401).json({
+                success: false,
+                message: "Authentication session has been revoked",
             });
         }
 
@@ -56,7 +108,12 @@ export const protect = async (req, res, next) => {
             });
         }
 
+        session.lastUsedAt = new Date();
+
+        await session.save();
+
         req.user = admin;
+        req.session = session;
 
         next();
     } catch (error) {

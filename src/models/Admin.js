@@ -108,6 +108,17 @@ const adminSchema = new mongoose.Schema(
             default: false,
         },
 
+        failedLoginAttempts: {
+            type: Number,
+            default: 0,
+            min: 0,
+        },
+
+        lockUntil: {
+            type: Date,
+            default: null,
+        },
+
         twoFactorEnabled: {
             type: Boolean,
             default: false,
@@ -132,6 +143,11 @@ const adminSchema = new mongoose.Schema(
         lastLoginIP: {
             type: String,
             default: null,
+        },
+
+        tokenVersion: {
+            type: Number,
+            default: 0,
         },
 
         createdBy: {

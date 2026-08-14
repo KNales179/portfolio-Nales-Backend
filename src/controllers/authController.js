@@ -2,7 +2,9 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import Admin from "../models/Admin.js";
 import AuditLog from "../models/AuditLog.js";
+import AdminSession from "../models/AdminSession.js";
 import generateToken from "../utils/generateToken.js";
+import crypto from "crypto";
 
 import {
   generateSecret,
@@ -11,6 +13,8 @@ import {
 } from "otplib";
 
 import QRCode from "qrcode";
+
+const sessionId = crypto.randomUUID();
 
 // ============================================================
 // CONSTANTS
@@ -21,6 +25,15 @@ const TWO_FACTOR_CHALLENGE_EXPIRES_IN = "5m";
 const TWO_FACTOR_ISSUER =
   process.env.TWO_FACTOR_ISSUER ||
   "Portfolio Admin";
+
+// ============================================================
+// LOGIN BRUTE-FORCE PROTECTION
+// ============================================================
+
+const MAX_FAILED_LOGIN_ATTEMPTS = 12;
+
+const LOGIN_LOCK_DURATION_MS =
+  30 * 60 * 1000;
 
 // ============================================================
 // HELPER
@@ -261,6 +274,26 @@ export const login = async (req, res) => {
     }
 
     // --------------------------------------------------------
+    // CHECK ACCOUNT LOCK
+    // --------------------------------------------------------
+
+    if (
+      admin.lockUntil &&
+      admin.lockUntil > new Date()
+    ) {
+      const remainingMinutes = Math.ceil(
+        (admin.lockUntil.getTime() - Date.now()) /
+        60000
+      );
+
+      return res.status(423).json({
+        success: false,
+        message:
+          `Account temporarily locked due to multiple failed login attempts. Try again in ${remainingMinutes} minute(s).`,
+      });
+    }
+
+    // --------------------------------------------------------
     // CHECK STATUS
     // --------------------------------------------------------
 
@@ -283,6 +316,51 @@ export const login = async (req, res) => {
       );
 
     if (!passwordMatches) {
+      admin.failedLoginAttempts =
+        (admin.failedLoginAttempts || 0) + 1;
+
+      // ----------------------------------------------------
+      // LOCK ACCOUNT AFTER MAXIMUM FAILED ATTEMPTS
+      // ----------------------------------------------------
+
+      if (
+        admin.failedLoginAttempts >=
+        MAX_FAILED_LOGIN_ATTEMPTS
+      ) {
+        admin.lockUntil = new Date(
+          Date.now() +
+          LOGIN_LOCK_DURATION_MS
+        );
+
+        await admin.save();
+
+        await AuditLog.create({
+          admin: admin._id,
+
+          action: "LOGIN_FAILED",
+
+          resource: "ADMIN",
+
+          resourceId: admin._id,
+
+          description:
+            "Account locked after multiple failed login attempts",
+
+          ipAddress: req.ip,
+
+          userAgent:
+            req.get("user-agent"),
+        });
+
+        return res.status(423).json({
+          success: false,
+          message:
+            "Account temporarily locked due to multiple failed login attempts. Please try again later.",
+        });
+      }
+
+      await admin.save();
+
       await AuditLog.create({
         admin: admin._id,
 
@@ -293,7 +371,7 @@ export const login = async (req, res) => {
         resourceId: admin._id,
 
         description:
-          "Failed login attempt",
+          `Failed login attempt ${admin.failedLoginAttempts} of ${MAX_FAILED_LOGIN_ATTEMPTS}`,
 
         ipAddress: req.ip,
 
@@ -306,6 +384,20 @@ export const login = async (req, res) => {
         message:
           "Invalid username or password",
       });
+    }
+
+    // --------------------------------------------------------
+    // RESET FAILED LOGIN ATTEMPTS
+    // --------------------------------------------------------
+
+    if (
+      admin.failedLoginAttempts > 0 ||
+      admin.lockUntil
+    ) {
+      admin.failedLoginAttempts = 0;
+      admin.lockUntil = null;
+
+      await admin.save();
     }
 
     // ========================================================
@@ -381,6 +473,49 @@ export const login = async (req, res) => {
     // NORMAL LOGIN WHEN 2FA IS DISABLED
     // ========================================================
 
+    const sessionId = crypto.randomUUID();
+
+    const deviceName =
+      req.get("x-device-name") ||
+      "Unknown Device";
+
+    const userAgent =
+      req.get("user-agent") ||
+      "Unknown User Agent";
+
+    const session = await AdminSession.create({
+      admin: admin._id,
+
+      sessionId,
+
+      deviceId:
+        req.get("x-device-id") ||
+        sessionId,
+
+      deviceName,
+
+      browser:
+        req.get("x-browser") ||
+        "Unknown Browser",
+
+      operatingSystem:
+        req.get("x-operating-system") ||
+        "Unknown OS",
+
+      ipAddress: req.ip,
+
+      userAgent,
+
+      firstLoginAt: new Date(),
+
+      lastUsedAt: new Date(),
+
+      expiresAt: new Date(
+        Date.now() +
+        24 * 60 * 60 * 1000
+      ),
+    });
+
     admin.lastLogin = new Date();
 
     admin.lastLoginIP = req.ip;
@@ -388,7 +523,10 @@ export const login = async (req, res) => {
     await admin.save();
 
     const token =
-      generateToken(admin);
+      generateToken(
+        admin,
+        session.sessionId
+      );
 
     // --------------------------------------------------------
     // AUDIT
@@ -630,6 +768,50 @@ export const verifyLoginTwoFactor = async (
     // 2FA SUCCESS
     // ========================================================
 
+    const sessionId = crypto.randomUUID();
+
+    const deviceName =
+      req.get("x-device-name") ||
+      "Unknown Device";
+
+    const userAgent =
+      req.get("user-agent") ||
+      "Unknown User Agent";
+
+    const session =
+      await AdminSession.create({
+        admin: admin._id,
+
+        sessionId,
+
+        deviceId:
+          req.get("x-device-id") ||
+          sessionId,
+
+        deviceName,
+
+        browser:
+          req.get("x-browser") ||
+          "Unknown Browser",
+
+        operatingSystem:
+          req.get("x-operating-system") ||
+          "Unknown OS",
+
+        ipAddress: req.ip,
+
+        userAgent,
+
+        firstLoginAt: new Date(),
+
+        lastUsedAt: new Date(),
+
+        expiresAt: new Date(
+          Date.now() +
+          24 * 60 * 60 * 1000
+        ),
+      });
+
     admin.lastLogin = new Date();
 
     admin.lastLoginIP = req.ip;
@@ -641,7 +823,10 @@ export const verifyLoginTwoFactor = async (
     // --------------------------------------------------------
 
     const token =
-      generateToken(admin);
+      generateToken(
+        admin,
+        session.sessionId
+      );
 
     // --------------------------------------------------------
     // AUDIT
@@ -1169,6 +1354,17 @@ export const logout = async (
   res
 ) => {
   try {
+    const admin = await Admin.findById(
+      req.user._id
+    );
+
+    if (admin) {
+      admin.tokenVersion =
+        (admin.tokenVersion || 0) + 1;
+
+      await admin.save();
+    }
+
     await AuditLog.create({
       admin: req.user._id,
 
