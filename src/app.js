@@ -7,8 +7,9 @@ import heroRoutes from "./routes/heroRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
 
 const app = express();
-app.set("trust proxy", 1);
-
+app.set("trust proxy", true);
+const ipLocation =
+    await getIpLocation(req.ip);
 app.use(
   cors({
     origin: true,
