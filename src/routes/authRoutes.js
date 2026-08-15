@@ -14,6 +14,7 @@ import {
     getTrustedDevices,
     trustCurrentDevice,
     removeTrustedDevice,
+    deleteDevice,
 } from "../controllers/authController.js";
 
 import { protect } from "../middleware/authMiddleware.js";
@@ -120,6 +121,13 @@ router.delete(
     "/trusted-devices/:deviceId",
     protect,
     removeTrustedDevice
+);
+
+// PERMANENTLY DELETE DEVICE
+router.delete(
+    "/trusted-devices/:deviceId/permanent",
+    protect,
+    deleteDevice
 );
 
 // ============================================================

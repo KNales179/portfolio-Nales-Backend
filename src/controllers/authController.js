@@ -1626,6 +1626,178 @@ export const getTrustedDevices = async (
 };
 
 // ============================================================
+// PERMANENTLY DELETE DEVICE
+// ============================================================
+//
+// Deletes the device completely.
+//
+// If the device is trusted:
+// 1. Remove it from Admin.trustedDevices
+// 2. Delete all AdminSession records for that device
+//
+// If the device is NOT trusted:
+// 1. Delete all AdminSession records for that device
+//
+// No revokedAt is used.
+// The device is permanently removed from the account.
+// ============================================================
+
+export const deleteDevice = async (
+  req,
+  res
+) => {
+  try {
+    const {
+      deviceId,
+    } = req.params;
+
+    if (!deviceId) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Device ID is required",
+      });
+    }
+
+    // --------------------------------------------------------
+    // FIND ADMIN
+    // --------------------------------------------------------
+
+    const admin =
+      await Admin.findById(
+        req.user._id
+      );
+
+    if (!admin) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Admin account not found",
+      });
+    }
+
+    // --------------------------------------------------------
+    // CHECK IF DEVICE EXISTS IN ADMIN SESSIONS
+    // --------------------------------------------------------
+
+    const sessionExists =
+      await AdminSession.exists({
+        admin: admin._id,
+        deviceId,
+      });
+
+    if (!sessionExists) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Device not found",
+      });
+    }
+
+    // --------------------------------------------------------
+    // CHECK IF DEVICE IS TRUSTED
+    // --------------------------------------------------------
+
+    const trustedDeviceIndex =
+      admin.trustedDevices.findIndex(
+        (device) =>
+          device.deviceId ===
+          deviceId
+      );
+
+    let removedTrustedDevice = null;
+
+    // --------------------------------------------------------
+    // REMOVE FROM TRUSTED DEVICES
+    // --------------------------------------------------------
+
+    if (
+      trustedDeviceIndex !== -1
+    ) {
+      removedTrustedDevice =
+        admin.trustedDevices[
+          trustedDeviceIndex
+        ];
+
+      admin.trustedDevices.splice(
+        trustedDeviceIndex,
+        1
+      );
+
+      await admin.save();
+    }
+
+    // --------------------------------------------------------
+    // DELETE ALL SESSIONS FOR DEVICE
+    // --------------------------------------------------------
+
+    const deleteResult =
+      await AdminSession.deleteMany({
+        admin: admin._id,
+        deviceId,
+      });
+
+    // --------------------------------------------------------
+    // AUDIT LOG
+    // --------------------------------------------------------
+
+    await AuditLog.create({
+      admin: admin._id,
+
+      action: "DELETE",
+
+      resource: "ADMIN_SESSION",
+
+      resourceId: admin._id,
+
+      description:
+        removedTrustedDevice
+          ? `Permanently deleted trusted device ${deviceId} and removed it from trusted devices`
+          : `Permanently deleted untrusted device ${deviceId}`,
+
+      ipAddress:
+        req.ip,
+
+      userAgent:
+        req.get("user-agent"),
+    });
+
+    // --------------------------------------------------------
+    // RESPONSE
+    // --------------------------------------------------------
+
+    return res.json({
+      success: true,
+
+      message:
+        "Device permanently deleted",
+
+      data: {
+        deviceId,
+
+        trustedDeviceRemoved:
+          !!removedTrustedDevice,
+
+        sessionsDeleted:
+          deleteResult.deletedCount,
+      },
+    });
+
+  } catch (error) {
+    console.error(
+      "Delete device error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message:
+        "Failed to permanently delete device",
+    });
+  }
+};
+
+// ============================================================
 // REMOVE OWN TRUSTED DEVICE
 // ============================================================
 
