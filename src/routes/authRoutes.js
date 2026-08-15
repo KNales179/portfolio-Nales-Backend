@@ -12,7 +12,7 @@ import {
 
     // Trusted devices
     getTrustedDevices,
-    addTrustedDevice,
+    trustCurrentDevice,
     removeTrustedDevice,
 } from "../controllers/authController.js";
 
@@ -112,7 +112,7 @@ router.get(
 router.post(
     "/trusted-devices",
     protect,
-    addTrustedDevice
+    trustCurrentDevice,
 );
 
 // MANUALLY REMOVE TRUSTED DEVICE

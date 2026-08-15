@@ -845,20 +845,6 @@ export const verifyLoginTwoFactor = async (
       });
     }
 
-    const deviceId =
-      req.get("x-device-id");
-
-    if (
-      decoded.deviceId &&
-      decoded.deviceId !== deviceId
-    ) {
-      return res.status(401).json({
-        success: false,
-        message:
-          "This 2FA challenge belongs to a different device",
-      });
-    }
-
     // --------------------------------------------------------
     // FIND ADMIN
     // --------------------------------------------------------
