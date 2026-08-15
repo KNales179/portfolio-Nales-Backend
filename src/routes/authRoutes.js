@@ -13,6 +13,7 @@ import {
     // Trusted devices
     getTrustedDevices,
     trustCurrentDevice,
+    trustDeviceById,
     removeTrustedDevice,
     deleteDevice,
 } from "../controllers/authController.js";
@@ -114,6 +115,13 @@ router.post(
     "/trusted-devices",
     protect,
     trustCurrentDevice,
+);
+
+// TRUST AN EXISTING DEVICE BY DEVICE ID
+router.post(
+    "/trusted-devices/:deviceId",
+    protect,
+    trustDeviceById
 );
 
 // MANUALLY REMOVE TRUSTED DEVICE

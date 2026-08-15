@@ -1382,6 +1382,321 @@ export const trustCurrentDevice = async (
 };
 
 // ============================================================
+// TRUST EXISTING DEVICE BY DEVICE ID
+// ============================================================
+//
+// Used when an admin wants to trust an existing UNTRUSTED
+// device from the Trusted Devices page.
+//
+// Requires:
+// - authenticated admin
+// - deviceId
+// - valid 2FA code
+//
+// This does NOT replace trustCurrentDevice.
+// ============================================================
+
+export const trustDeviceById = async (
+    req,
+    res
+) => {
+    try {
+        const {
+            deviceId,
+        } = req.params;
+
+        const {
+            code,
+        } = req.body;
+
+        // ------------------------------------------------------
+        // VALIDATION
+        // ------------------------------------------------------
+
+        if (!deviceId) {
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Device ID is required",
+            });
+        }
+
+        if (!code) {
+            return res.status(400).json({
+                success: false,
+                message:
+                    "2FA verification code is required",
+            });
+        }
+
+        // ------------------------------------------------------
+        // FIND ADMIN
+        // ------------------------------------------------------
+
+        const admin =
+            await Admin.findById(
+                req.user._id
+            ).select(
+                "+twoFactorSecret"
+            );
+
+        if (!admin) {
+            return res.status(404).json({
+                success: false,
+                message:
+                    "Admin account not found",
+            });
+        }
+
+        // ------------------------------------------------------
+        // CHECK ACCOUNT STATUS
+        // ------------------------------------------------------
+
+        if (admin.status !== "ACTIVE") {
+            return res.status(403).json({
+                success: false,
+                message:
+                    "Admin account is inactive",
+            });
+        }
+
+        // ------------------------------------------------------
+        // CHECK 2FA
+        // ------------------------------------------------------
+
+        if (
+            !admin.twoFactorEnabled ||
+            !admin.twoFactorSecret
+        ) {
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Two-factor authentication must be enabled",
+            });
+        }
+
+        // ------------------------------------------------------
+        // FIND DEVICE FROM EXISTING SESSIONS
+        // ------------------------------------------------------
+        //
+        // We use AdminSession because an UNTRUSTED device
+        // doesn't exist in admin.trustedDevices yet.
+        //
+
+        const session =
+            await AdminSession.findOne({
+                admin: admin._id,
+                deviceId,
+            }).sort({
+                lastUsedAt: -1,
+            });
+
+        if (!session) {
+            return res.status(404).json({
+                success: false,
+                message:
+                    "Device not found",
+            });
+        }
+
+        // ------------------------------------------------------
+        // CHECK IF ALREADY TRUSTED
+        // ------------------------------------------------------
+
+        const alreadyTrusted =
+            admin.trustedDevices.some(
+                (device) =>
+                    device.deviceId ===
+                    deviceId
+            );
+
+        if (alreadyTrusted) {
+            return res.status(409).json({
+                success: false,
+                message:
+                    "Device is already trusted",
+            });
+        }
+
+        // ------------------------------------------------------
+        // NORMALIZE 2FA CODE
+        // ------------------------------------------------------
+
+        const normalizedCode =
+            String(code)
+                .replace(/\s/g, "")
+                .trim();
+
+        if (
+            !/^\d{6}$/.test(
+                normalizedCode
+            )
+        ) {
+            return res.status(400).json({
+                success: false,
+                message:
+                    "2FA code must contain 6 digits",
+            });
+        }
+
+        // ------------------------------------------------------
+        // VERIFY 2FA
+        // ------------------------------------------------------
+
+        const verification =
+            await verify({
+                secret:
+                    admin.twoFactorSecret,
+
+                token:
+                    normalizedCode,
+            });
+
+        if (!verification.valid) {
+            await AuditLog.create({
+                admin:
+                    admin._id,
+
+                action:
+                    "TRUSTED_DEVICE_ADD_FAILED",
+
+                resource:
+                    "TRUSTED_DEVICE",
+
+                resourceId:
+                    admin._id,
+
+                description:
+                    `Failed 2FA verification while trusting device ${deviceId}`,
+
+                ipAddress:
+                    req.ip,
+
+                userAgent:
+                    req.get("user-agent"),
+            });
+
+            return res.status(401).json({
+                success: false,
+                message:
+                    "Invalid authentication code",
+            });
+        }
+
+        // ------------------------------------------------------
+        // REMOVE OLD INACTIVE TRUSTED DEVICES
+        // ------------------------------------------------------
+
+        await removeInactiveTrustedDevices(
+            admin
+        );
+
+        // ------------------------------------------------------
+        // DEVICE INFORMATION
+        // ------------------------------------------------------
+
+        const now = new Date();
+
+        const deviceName =
+            session.deviceName ||
+            "Unknown Device";
+
+        const userAgent =
+            session.userAgent ||
+            req.get("user-agent") ||
+            "Unknown User Agent";
+
+        // ------------------------------------------------------
+        // ADD DEVICE TO TRUSTED DEVICES
+        // ------------------------------------------------------
+
+        admin.trustedDevices.push({
+            deviceId,
+
+            deviceName,
+
+            ipAddress:
+                session.ipAddress ||
+                req.ip,
+
+            userAgent,
+
+            trustedAt:
+                now,
+
+            lastUsedAt:
+                session.lastUsedAt ||
+                now,
+
+            lastTwoFactorVerifiedAt:
+                now,
+        });
+
+        await admin.save();
+
+        // ------------------------------------------------------
+        // AUDIT
+        // ------------------------------------------------------
+
+        await AuditLog.create({
+            admin:
+                admin._id,
+
+            action:
+                "CREATE",
+
+            resource:
+                "TRUSTED_DEVICE",
+
+            resourceId:
+                admin._id,
+
+            description:
+                `Trusted existing device: ${deviceName} (${deviceId})`,
+
+            ipAddress:
+                req.ip,
+
+            userAgent:
+                req.get("user-agent"),
+        });
+
+        // ------------------------------------------------------
+        // RESPONSE
+        // ------------------------------------------------------
+
+        const trustedDevice =
+            admin.trustedDevices[
+                admin.trustedDevices.length - 1
+            ];
+
+        return res.status(201).json({
+            success: true,
+
+            message:
+                "Device trusted successfully",
+
+            data: {
+                device:
+                    trustedDevice,
+            },
+        });
+
+    } catch (error) {
+        console.error(
+            "Trust device by ID error:",
+            error
+        );
+
+        return res.status(500).json({
+            success: false,
+            message:
+                "Failed to trust device",
+        });
+    }
+};
+
+// ============================================================
 // GET ACCOUNT DEVICES
 // ============================================================
 //
@@ -1643,158 +1958,226 @@ export const getTrustedDevices = async (
 // ============================================================
 
 export const deleteDevice = async (
-  req,
-  res
+    req,
+    res
 ) => {
-  try {
-    const {
-      deviceId,
-    } = req.params;
+    try {
+        const { deviceId } = req.params;
+        const { code } = req.body;
 
-    if (!deviceId) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Device ID is required",
-      });
+        if (!deviceId) {
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Device ID is required",
+            });
+        }
+
+        if (!code) {
+            return res.status(400).json({
+                success: false,
+                message:
+                    "2FA verification code is required",
+            });
+        }
+
+        const admin =
+            await Admin.findById(
+                req.user._id
+            ).select("+twoFactorSecret");
+
+        if (!admin) {
+            return res.status(404).json({
+                success: false,
+                message:
+                    "Admin account not found",
+            });
+        }
+
+        // ----------------------------------------------------
+        // REQUIRE 2FA
+        // ----------------------------------------------------
+
+        if (
+            !admin.twoFactorEnabled ||
+            !admin.twoFactorSecret
+        ) {
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Two-factor authentication must be enabled",
+            });
+        }
+
+        // ----------------------------------------------------
+        // VERIFY 2FA
+        // ----------------------------------------------------
+
+        const normalizedCode =
+            String(code)
+                .replace(/\s/g, "")
+                .trim();
+
+        if (!/^\d{6}$/.test(normalizedCode)) {
+            return res.status(400).json({
+                success: false,
+                message:
+                    "2FA code must contain 6 digits",
+            });
+        }
+
+        const verification =
+            await verify({
+                secret:
+                    admin.twoFactorSecret,
+
+                token:
+                    normalizedCode,
+            });
+
+        if (!verification.valid) {
+            await AuditLog.create({
+                admin: admin._id,
+
+                action:
+                    "DEVICE_DELETE_FAILED",
+
+                resource:
+                    "ADMIN_SESSION",
+
+                resourceId:
+                    admin._id,
+
+                description:
+                    `Failed 2FA verification while deleting device ${deviceId}`,
+
+                ipAddress:
+                    req.ip,
+
+                userAgent:
+                    req.get("user-agent"),
+            });
+
+            return res.status(401).json({
+                success: false,
+                message:
+                    "Invalid authentication code",
+            });
+        }
+
+        // ----------------------------------------------------
+        // CHECK DEVICE EXISTS
+        // ----------------------------------------------------
+
+        const sessionExists =
+            await AdminSession.exists({
+                admin: admin._id,
+                deviceId,
+            });
+
+        if (!sessionExists) {
+            return res.status(404).json({
+                success: false,
+                message:
+                    "Device not found",
+            });
+        }
+
+        // ----------------------------------------------------
+        // REMOVE FROM TRUSTED DEVICES
+        // ----------------------------------------------------
+
+        const trustedDeviceIndex =
+            admin.trustedDevices.findIndex(
+                (device) =>
+                    device.deviceId ===
+                    deviceId
+            );
+
+        let removedTrustedDevice = null;
+
+        if (
+            trustedDeviceIndex !== -1
+        ) {
+            removedTrustedDevice =
+                admin.trustedDevices[
+                    trustedDeviceIndex
+                ];
+
+            admin.trustedDevices.splice(
+                trustedDeviceIndex,
+                1
+            );
+
+            await admin.save();
+        }
+
+        // ----------------------------------------------------
+        // DELETE ALL SESSIONS
+        // ----------------------------------------------------
+
+        const deleteResult =
+            await AdminSession.deleteMany({
+                admin: admin._id,
+                deviceId,
+            });
+
+        // ----------------------------------------------------
+        // AUDIT
+        // ----------------------------------------------------
+
+        await AuditLog.create({
+            admin: admin._id,
+
+            action: "DELETE",
+
+            resource:
+                "ADMIN_SESSION",
+
+            resourceId:
+                admin._id,
+
+            description:
+                removedTrustedDevice
+                    ? `Permanently deleted trusted device ${deviceId}`
+                    : `Permanently deleted untrusted device ${deviceId}`,
+
+            ipAddress:
+                req.ip,
+
+            userAgent:
+                req.get("user-agent"),
+        });
+
+        return res.json({
+            success: true,
+
+            message:
+                "Device permanently deleted",
+
+            data: {
+                deviceId,
+
+                trustedDeviceRemoved:
+                    !!removedTrustedDevice,
+
+                sessionsDeleted:
+                    deleteResult.deletedCount,
+            },
+        });
+
+    } catch (error) {
+        console.error(
+            "Delete device error:",
+            error
+        );
+
+        return res.status(500).json({
+            success: false,
+            message:
+                "Failed to permanently delete device",
+        });
     }
-
-    // --------------------------------------------------------
-    // FIND ADMIN
-    // --------------------------------------------------------
-
-    const admin =
-      await Admin.findById(
-        req.user._id
-      );
-
-    if (!admin) {
-      return res.status(404).json({
-        success: false,
-        message:
-          "Admin account not found",
-      });
-    }
-
-    // --------------------------------------------------------
-    // CHECK IF DEVICE EXISTS IN ADMIN SESSIONS
-    // --------------------------------------------------------
-
-    const sessionExists =
-      await AdminSession.exists({
-        admin: admin._id,
-        deviceId,
-      });
-
-    if (!sessionExists) {
-      return res.status(404).json({
-        success: false,
-        message:
-          "Device not found",
-      });
-    }
-
-    // --------------------------------------------------------
-    // CHECK IF DEVICE IS TRUSTED
-    // --------------------------------------------------------
-
-    const trustedDeviceIndex =
-      admin.trustedDevices.findIndex(
-        (device) =>
-          device.deviceId ===
-          deviceId
-      );
-
-    let removedTrustedDevice = null;
-
-    // --------------------------------------------------------
-    // REMOVE FROM TRUSTED DEVICES
-    // --------------------------------------------------------
-
-    if (
-      trustedDeviceIndex !== -1
-    ) {
-      removedTrustedDevice =
-        admin.trustedDevices[
-          trustedDeviceIndex
-        ];
-
-      admin.trustedDevices.splice(
-        trustedDeviceIndex,
-        1
-      );
-
-      await admin.save();
-    }
-
-    // --------------------------------------------------------
-    // DELETE ALL SESSIONS FOR DEVICE
-    // --------------------------------------------------------
-
-    const deleteResult =
-      await AdminSession.deleteMany({
-        admin: admin._id,
-        deviceId,
-      });
-
-    // --------------------------------------------------------
-    // AUDIT LOG
-    // --------------------------------------------------------
-
-    await AuditLog.create({
-      admin: admin._id,
-
-      action: "DELETE",
-
-      resource: "ADMIN_SESSION",
-
-      resourceId: admin._id,
-
-      description:
-        removedTrustedDevice
-          ? `Permanently deleted trusted device ${deviceId} and removed it from trusted devices`
-          : `Permanently deleted untrusted device ${deviceId}`,
-
-      ipAddress:
-        req.ip,
-
-      userAgent:
-        req.get("user-agent"),
-    });
-
-    // --------------------------------------------------------
-    // RESPONSE
-    // --------------------------------------------------------
-
-    return res.json({
-      success: true,
-
-      message:
-        "Device permanently deleted",
-
-      data: {
-        deviceId,
-
-        trustedDeviceRemoved:
-          !!removedTrustedDevice,
-
-        sessionsDeleted:
-          deleteResult.deletedCount,
-      },
-    });
-
-  } catch (error) {
-    console.error(
-      "Delete device error:",
-      error
-    );
-
-    return res.status(500).json({
-      success: false,
-      message:
-        "Failed to permanently delete device",
-    });
-  }
 };
 
 // ============================================================
