@@ -1382,7 +1382,16 @@ export const trustCurrentDevice = async (
 };
 
 // ============================================================
-// GET TRUSTED DEVICES
+// GET ACCOUNT DEVICES
+// ============================================================
+//
+// Returns every device that has logged into the current account.
+//
+// A device is considered:
+// - trusted   -> exists in admin.trustedDevices
+// - untrusted -> exists in AdminSession but not trusted
+//
+// Multiple sessions from the same device are merged using deviceId.
 // ============================================================
 
 export const getTrustedDevices = async (
@@ -1403,42 +1412,197 @@ export const getTrustedDevices = async (
       });
     }
 
+    // --------------------------------------------------------
+    // REMOVE OLD TRUSTED DEVICES
+    // --------------------------------------------------------
+
     await removeInactiveTrustedDevices(
       admin
     );
 
+    // --------------------------------------------------------
+    // CURRENT SESSION
+    // --------------------------------------------------------
+
     const currentDeviceId =
+      req.session?.deviceId ||
       req.get("x-device-id");
 
+    // --------------------------------------------------------
+    // GET ALL SESSIONS FOR THIS ADMIN
+    // --------------------------------------------------------
+    //
+    // We intentionally fetch sessions instead of trustedDevices
+    // because we also want to show devices that are NOT trusted.
+    //
+    // Sort newest first.
+    // --------------------------------------------------------
+
+    const sessions =
+      await AdminSession.find({
+        admin: admin._id,
+      }).sort({
+        lastUsedAt: -1,
+      });
+
+    // --------------------------------------------------------
+    // BUILD TRUSTED DEVICE LOOKUP
+    // --------------------------------------------------------
+
+    const trustedDeviceMap =
+      new Map();
+
+    admin.trustedDevices.forEach(
+      (device) => {
+        trustedDeviceMap.set(
+          device.deviceId,
+          device
+        );
+      }
+    );
+
+    // --------------------------------------------------------
+    // MERGE SESSIONS BY DEVICE ID
+    // --------------------------------------------------------
+    //
+    // One device can have many sessions:
+    //
+    // PC
+    // ├── login session #1
+    // ├── login session #2
+    // └── login session #3
+    //
+    // The frontend should only see ONE PC.
+    // --------------------------------------------------------
+
+    const deviceMap =
+      new Map();
+
+    for (const session of sessions) {
+      if (!session.deviceId) {
+        continue;
+      }
+
+      const existing =
+        deviceMap.get(
+          session.deviceId
+        );
+
+      if (!existing) {
+        deviceMap.set(
+          session.deviceId,
+          {
+            deviceId:
+              session.deviceId,
+
+            deviceName:
+              session.deviceName ||
+              "Unknown Device",
+
+            browser:
+              session.browser ||
+              "Unknown Browser",
+
+            operatingSystem:
+              session.operatingSystem ||
+              "Unknown OS",
+
+            ipAddress:
+              session.ipAddress ||
+              null,
+
+            location:
+              session.location ||
+              null,
+
+            userAgent:
+              session.userAgent ||
+              null,
+
+            firstLoginAt:
+              session.firstLoginAt,
+
+            lastUsedAt:
+              session.lastUsedAt,
+
+            isCurrentDevice:
+              session.deviceId ===
+              currentDeviceId,
+
+            isTrusted:
+              trustedDeviceMap.has(
+                session.deviceId
+              ),
+
+            revokedAt:
+              session.revokedAt ||
+              null,
+          }
+        );
+
+        continue;
+      }
+
+      // ------------------------------------------------------
+      // UPDATE AGGREGATED DEVICE
+      // ------------------------------------------------------
+
+      // Newest lastUsedAt
+      if (
+        session.lastUsedAt &&
+        (
+          !existing.lastUsedAt ||
+          new Date(
+            session.lastUsedAt
+          ) >
+          new Date(
+            existing.lastUsedAt
+          )
+        )
+      ) {
+        existing.lastUsedAt =
+          session.lastUsedAt;
+      }
+
+      // Oldest firstLoginAt
+      if (
+        session.firstLoginAt &&
+        (
+          !existing.firstLoginAt ||
+          new Date(
+            session.firstLoginAt
+          ) <
+          new Date(
+            existing.firstLoginAt
+          )
+        )
+      ) {
+        existing.firstLoginAt =
+          session.firstLoginAt;
+      }
+
+      // Current device
+      if (
+        session.deviceId ===
+        currentDeviceId
+      ) {
+        existing.isCurrentDevice =
+          true;
+      }
+    }
+
+    // --------------------------------------------------------
+    // CONVERT MAP TO ARRAY
+    // --------------------------------------------------------
+
     const devices =
-      admin.trustedDevices.map(
-        (device) => ({
-          deviceId:
-            device.deviceId,
-
-          deviceName:
-            device.deviceName,
-
-          ipAddress:
-            device.ipAddress,
-
-          userAgent:
-            device.userAgent,
-
-          trustedAt:
-            device.trustedAt,
-
-          lastUsedAt:
-            device.lastUsedAt,
-
-          lastTwoFactorVerifiedAt:
-            device.lastTwoFactorVerifiedAt,
-
-          isCurrentDevice:
-            device.deviceId ===
-            currentDeviceId,
-        })
+      Array.from(
+        deviceMap.values()
       );
+
+    // --------------------------------------------------------
+    // RETURN
+    // --------------------------------------------------------
 
     return res.json({
       success: true,
@@ -1449,14 +1613,14 @@ export const getTrustedDevices = async (
     });
   } catch (error) {
     console.error(
-      "Get trusted devices error:",
+      "Get account devices error:",
       error
     );
 
     return res.status(500).json({
       success: false,
       message:
-        "Failed to retrieve trusted devices",
+        "Failed to retrieve account devices",
     });
   }
 };
@@ -1474,6 +1638,10 @@ export const removeTrustedDevice = async (
       deviceId,
     } = req.params;
 
+    const {
+      code,
+    } = req.body;
+
     if (!deviceId) {
       return res.status(400).json({
         success: false,
@@ -1482,9 +1650,19 @@ export const removeTrustedDevice = async (
       });
     }
 
+    if (!code) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "2FA verification code is required",
+      });
+    }
+
     const admin =
       await Admin.findById(
         req.user._id
+      ).select(
+        "+twoFactorSecret"
       );
 
     if (!admin) {
@@ -1495,10 +1673,95 @@ export const removeTrustedDevice = async (
       });
     }
 
+    // --------------------------------------------------------
+    // CHECK 2FA
+    // --------------------------------------------------------
+
+    if (
+      !admin.twoFactorEnabled ||
+      !admin.twoFactorSecret
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Two-factor authentication must be enabled",
+      });
+    }
+
+    // --------------------------------------------------------
+    // NORMALIZE CODE
+    // --------------------------------------------------------
+
+    const normalizedCode =
+      String(code)
+        .replace(/\s/g, "")
+        .trim();
+
+    if (
+      !/^\d{6}$/.test(
+        normalizedCode
+      )
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "2FA code must contain 6 digits",
+      });
+    }
+
+    // --------------------------------------------------------
+    // VERIFY 2FA
+    // --------------------------------------------------------
+
+    const verification =
+      await verify({
+        secret:
+          admin.twoFactorSecret,
+
+        token:
+          normalizedCode,
+      });
+
+    if (!verification.valid) {
+      await AuditLog.create({
+        admin:
+          admin._id,
+
+        action:
+          "TRUSTED_DEVICE_REMOVE_FAILED",
+
+        resource:
+          "TRUSTED_DEVICE",
+
+        resourceId:
+          admin._id,
+
+        description:
+          `Failed 2FA verification while removing trusted device ${deviceId}`,
+
+        ipAddress:
+          req.ip,
+
+        userAgent:
+          req.get("user-agent"),
+      });
+
+      return res.status(401).json({
+        success: false,
+        message:
+          "Invalid authentication code",
+      });
+    }
+
+    // --------------------------------------------------------
+    // FIND TRUSTED DEVICE
+    // --------------------------------------------------------
+
     const deviceIndex =
       admin.trustedDevices.findIndex(
         (device) =>
-          device.deviceId === deviceId
+          device.deviceId ===
+          deviceId
       );
 
     if (deviceIndex === -1) {
@@ -1508,6 +1771,10 @@ export const removeTrustedDevice = async (
           "Trusted device not found",
       });
     }
+
+    // --------------------------------------------------------
+    // REMOVE TRUST
+    // --------------------------------------------------------
 
     const removedDevice =
       admin.trustedDevices[
@@ -1521,10 +1788,16 @@ export const removeTrustedDevice = async (
 
     await admin.save();
 
-    await AuditLog.create({
-      admin: admin._id,
+    // --------------------------------------------------------
+    // AUDIT
+    // --------------------------------------------------------
 
-      action: "DELETE",
+    await AuditLog.create({
+      admin:
+        admin._id,
+
+      action:
+        "DELETE",
 
       resource:
         "TRUSTED_DEVICE",
@@ -1548,6 +1821,7 @@ export const removeTrustedDevice = async (
       message:
         "Trusted device removed successfully",
     });
+
   } catch (error) {
     console.error(
       "Remove trusted device error:",
