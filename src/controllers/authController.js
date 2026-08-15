@@ -25,9 +25,16 @@ const sessionId = crypto.randomUUID();
 
 const TWO_FACTOR_CHALLENGE_EXPIRES_IN = "5m";
 
+const TWO_FACTOR_RENEWAL_MS =
+  8 * 60 * 60 * 1000;
+
+const TRUSTED_DEVICE_INACTIVE_MS =
+  30 * 24 * 60 * 60 * 1000;
+
 const TWO_FACTOR_ISSUER =
   process.env.TWO_FACTOR_ISSUER ||
   "Portfolio Admin";
+
 
 // ============================================================
 // LOGIN BRUTE-FORCE PROTECTION
@@ -55,6 +62,36 @@ const getAdminResponse = (admin) => ({
   profileImage:
     admin.profileImage?.url || null,
 });
+
+const removeInactiveTrustedDevices = async (admin) => {
+  const now = Date.now();
+
+  const activeTrustedDevices =
+    admin.trustedDevices.filter((device) => {
+      const lastUsedAt =
+        device.lastUsedAt
+          ? new Date(device.lastUsedAt).getTime()
+          : 0;
+
+      return (
+        now - lastUsedAt <
+        TRUSTED_DEVICE_INACTIVE_MS
+      );
+    });
+
+  const removedCount =
+    admin.trustedDevices.length -
+    activeTrustedDevices.length;
+
+  if (removedCount > 0) {
+    admin.trustedDevices =
+      activeTrustedDevices;
+
+    await admin.save();
+  }
+
+  return removedCount;
+};
 
 // ============================================================
 // INITIAL SUPER ADMIN SETUP
@@ -411,65 +448,179 @@ export const login = async (req, res) => {
       admin.twoFactorEnabled &&
       admin.twoFactorSecret
     ) {
-      // ----------------------------------------------------
-      // CREATE SHORT-LIVED 2FA CHALLENGE TOKEN
-      // ----------------------------------------------------
+      const deviceId =
+        req.get("x-device-id");
 
-      const challengeToken =
-        jwt.sign(
-          {
-            id: admin._id.toString(),
+      // ------------------------------------------------------
+      // REMOVE TRUSTED DEVICES INACTIVE FOR 30 DAYS
+      // ------------------------------------------------------
 
-            type: "2FA_CHALLENGE",
+      await removeInactiveTrustedDevices(admin);
+
+      // ------------------------------------------------------
+      // CHECK TRUSTED DEVICE
+      // ------------------------------------------------------
+
+      const trustedDevice =
+        deviceId
+          ? admin.trustedDevices.find(
+            (device) =>
+              device.deviceId === deviceId
+          )
+          : null;
+
+      // ------------------------------------------------------
+      // DEVICE IS TRUSTED
+      // ------------------------------------------------------
+
+      if (trustedDevice) {
+        const now = Date.now();
+
+        const lastTwoFactorVerifiedAt =
+          trustedDevice.lastTwoFactorVerifiedAt
+            ? new Date(
+              trustedDevice.lastTwoFactorVerifiedAt
+            ).getTime()
+            : 0;
+
+        const twoFactorRenewalExpired =
+          !lastTwoFactorVerifiedAt ||
+          now - lastTwoFactorVerifiedAt >=
+          TWO_FACTOR_RENEWAL_MS;
+
+        // ----------------------------------------------------
+        // TRUSTED DEVICE + 2FA STILL VALID
+        // ----------------------------------------------------
+
+        if (!twoFactorRenewalExpired) {
+          trustedDevice.lastUsedAt =
+            new Date();
+
+          await admin.save();
+
+          console.log(
+            "Trusted device accepted without 2FA"
+          );
+
+          // Continue to normal session creation below.
+        }
+
+        // ----------------------------------------------------
+        // TRUSTED DEVICE + 2FA RENEWAL EXPIRED
+        // ----------------------------------------------------
+
+        else {
+          const challengeToken =
+            jwt.sign(
+              {
+                id: admin._id.toString(),
+                type: "2FA_CHALLENGE",
+                purpose: "RENEWAL",
+                deviceId,
+              },
+
+              process.env.JWT_SECRET,
+
+              {
+                expiresIn:
+                  TWO_FACTOR_CHALLENGE_EXPIRES_IN,
+              }
+            );
+
+          await AuditLog.create({
+            admin: admin._id,
+
+            action:
+              "LOGIN_2FA_REQUIRED",
+
+            resource: "ADMIN",
+
+            resourceId: admin._id,
+
+            description:
+              "Trusted device 2FA renewal required",
+
+            ipAddress: req.ip,
+
+            userAgent:
+              req.get("user-agent"),
+          });
+
+          return res.json({
+            success: true,
+
+            requiresTwoFactor: true,
+
+            message:
+              "2FA renewal required",
+
+            data: {
+              challengeToken,
+
+              username:
+                admin.username,
+            },
+          });
+        }
+      }
+
+      // ------------------------------------------------------
+      // DEVICE IS NOT TRUSTED
+      // ------------------------------------------------------
+
+      else {
+        const challengeToken =
+          jwt.sign(
+            {
+              id: admin._id.toString(),
+              type: "2FA_CHALLENGE",
+              purpose: "VERIFICATION",
+              deviceId,
+            },
+
+            process.env.JWT_SECRET,
+
+            {
+              expiresIn:
+                TWO_FACTOR_CHALLENGE_EXPIRES_IN,
+            }
+          );
+
+        await AuditLog.create({
+          admin: admin._id,
+
+          action:
+            "LOGIN_2FA_REQUIRED",
+
+          resource: "ADMIN",
+
+          resourceId: admin._id,
+
+          description:
+            "Untrusted device 2FA verification required",
+
+          ipAddress: req.ip,
+
+          userAgent:
+            req.get("user-agent"),
+        });
+
+        return res.json({
+          success: true,
+
+          requiresTwoFactor: true,
+
+          message:
+            "Two-factor authentication required",
+
+          data: {
+            challengeToken,
+
+            username:
+              admin.username,
           },
-
-          process.env.JWT_SECRET,
-
-          {
-            expiresIn:
-              TWO_FACTOR_CHALLENGE_EXPIRES_IN,
-          }
-        );
-
-      // ----------------------------------------------------
-      // AUDIT
-      // ----------------------------------------------------
-
-      await AuditLog.create({
-        admin: admin._id,
-
-        action: "LOGIN_2FA_REQUIRED",
-
-        resource: "ADMIN",
-
-        resourceId: admin._id,
-
-        description:
-          "Password verified; 2FA verification required",
-
-        ipAddress: req.ip,
-
-        userAgent:
-          req.get("user-agent"),
-      });
-
-      // ----------------------------------------------------
-      // DO NOT ISSUE REAL JWT YET
-      // ----------------------------------------------------
-
-      return res.json({
-        success: true,
-
-        requiresTwoFactor: true,
-
-        message:
-          "Two-factor authentication required",
-
-        data: {
-          challengeToken,
-          username: admin.username,
-        },
-      });
+        });
+      }
     }
 
     // ========================================================
@@ -678,6 +829,37 @@ export const verifyLoginTwoFactor = async (
     }
 
     // --------------------------------------------------------
+    // VALIDATE CHALLENGE PURPOSE
+    // --------------------------------------------------------
+
+
+    if (
+      !["VERIFICATION", "RENEWAL"].includes(
+        decoded.purpose
+      )
+    ) {
+      return res.status(401).json({
+        success: false,
+        message:
+          "Invalid 2FA challenge purpose",
+      });
+    }
+
+    const deviceId =
+      req.get("x-device-id");
+
+    if (
+      decoded.deviceId &&
+      decoded.deviceId !== deviceId
+    ) {
+      return res.status(401).json({
+        success: false,
+        message:
+          "This 2FA challenge belongs to a different device",
+      });
+    }
+
+    // --------------------------------------------------------
     // FIND ADMIN
     // --------------------------------------------------------
 
@@ -786,6 +968,35 @@ export const verifyLoginTwoFactor = async (
 
     // ========================================================
     // 2FA SUCCESS
+    // ========================================================
+
+    const deviceId =
+      req.get("x-device-id");
+
+    const trustedDevice =
+      deviceId
+        ? admin.trustedDevices.find(
+          (device) =>
+            device.deviceId === deviceId
+        )
+        : null;
+
+    // --------------------------------------------------------
+    // RENEW 2FA FOR EXISTING TRUSTED DEVICE
+    // --------------------------------------------------------
+
+    if (trustedDevice) {
+      trustedDevice.lastUsedAt =
+        new Date();
+
+      trustedDevice.lastTwoFactorVerifiedAt =
+        new Date();
+
+      await admin.save();
+    }
+
+    // ========================================================
+    // CREATE NORMAL LOGIN SESSION
     // ========================================================
 
     const sessionId = crypto.randomUUID();
@@ -914,6 +1125,580 @@ export const verifyLoginTwoFactor = async (
       success: false,
       message:
         "Failed to verify 2FA",
+    });
+  }
+};
+
+// ============================================================
+// TRUST CURRENT DEVICE
+// ============================================================
+
+export const trustCurrentDevice = async (
+  req,
+  res
+) => {
+  try {
+    const {
+      code,
+    } = req.body;
+
+    if (!code) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "2FA verification code is required",
+      });
+    }
+
+    const deviceId =
+      req.get("x-device-id");
+
+    if (!deviceId) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Device ID is required",
+      });
+    }
+
+    const admin =
+      await Admin.findById(
+        req.user._id
+      ).select(
+        "+twoFactorSecret"
+      );
+
+    if (!admin) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Admin account not found",
+      });
+    }
+
+    if (admin.status !== "ACTIVE") {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Admin account is inactive",
+      });
+    }
+
+    if (
+      !admin.twoFactorEnabled ||
+      !admin.twoFactorSecret
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Two-factor authentication must be enabled",
+      });
+    }
+
+    // --------------------------------------------------------
+    // REMOVE INACTIVE TRUSTED DEVICES
+    // --------------------------------------------------------
+
+    await removeInactiveTrustedDevices(admin);
+
+    // --------------------------------------------------------
+    // NORMALIZE CODE
+    // --------------------------------------------------------
+
+    const normalizedCode =
+      String(code)
+        .replace(/\s/g, "")
+        .trim();
+
+    if (
+      !/^\d{6}$/.test(
+        normalizedCode
+      )
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "2FA code must contain 6 digits",
+      });
+    }
+
+    // --------------------------------------------------------
+    // VERIFY 2FA
+    // --------------------------------------------------------
+
+    const verification =
+      await verify({
+        secret:
+          admin.twoFactorSecret,
+
+        token:
+          normalizedCode,
+      });
+
+    if (!verification.valid) {
+      await AuditLog.create({
+        admin: admin._id,
+
+        action:
+          "TRUSTED_DEVICE_ADD_FAILED",
+
+        resource: "ADMIN",
+
+        resourceId: admin._id,
+
+        description:
+          "Failed 2FA verification while trusting device",
+
+        ipAddress: req.ip,
+
+        userAgent:
+          req.get("user-agent"),
+      });
+
+      return res.status(401).json({
+        success: false,
+        message:
+          "Invalid authentication code",
+      });
+    }
+
+    // --------------------------------------------------------
+    // DEVICE INFORMATION
+    // --------------------------------------------------------
+
+    const deviceName =
+      req.get("x-device-name") ||
+      "Unknown Device";
+
+    const userAgent =
+      req.get("user-agent") ||
+      "Unknown User Agent";
+
+    // --------------------------------------------------------
+    // CHECK IF ALREADY TRUSTED
+    // --------------------------------------------------------
+
+    const existingDevice =
+      admin.trustedDevices.find(
+        (device) =>
+          device.deviceId === deviceId
+      );
+
+    if (existingDevice) {
+      existingDevice.deviceName =
+        deviceName;
+
+      existingDevice.ipAddress =
+        req.ip;
+
+      existingDevice.userAgent =
+        userAgent;
+
+      existingDevice.lastUsedAt =
+        new Date();
+
+      existingDevice.lastTwoFactorVerifiedAt =
+        new Date();
+
+      await admin.save();
+
+      return res.json({
+        success: true,
+
+        message:
+          "Device trust renewed successfully",
+
+        data: {
+          device:
+            existingDevice,
+        },
+      });
+    }
+
+    // --------------------------------------------------------
+    // ADD NEW TRUSTED DEVICE
+    // --------------------------------------------------------
+
+    const now = new Date();
+
+    admin.trustedDevices.push({
+      deviceId,
+
+      deviceName,
+
+      ipAddress:
+        req.ip,
+
+      userAgent,
+
+      trustedAt:
+        now,
+
+      lastUsedAt:
+        now,
+
+      lastTwoFactorVerifiedAt:
+        now,
+    });
+
+    await admin.save();
+
+    // --------------------------------------------------------
+    // AUDIT
+    // --------------------------------------------------------
+
+    await AuditLog.create({
+      admin: admin._id,
+
+      action: "CREATE",
+
+      resource:
+        "TRUSTED_DEVICE",
+
+      resourceId:
+        admin._id,
+
+      description:
+        `Trusted device added: ${deviceName}`,
+
+      ipAddress:
+        req.ip,
+
+      userAgent:
+        userAgent,
+    });
+
+    return res.status(201).json({
+      success: true,
+
+      message:
+        "Device trusted successfully",
+
+      data: {
+        device:
+          admin.trustedDevices[
+          admin.trustedDevices.length - 1
+          ],
+      },
+    });
+  } catch (error) {
+    console.error(
+      "Trust current device error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message:
+        "Failed to trust device",
+    });
+  }
+};
+
+// ============================================================
+// GET TRUSTED DEVICES
+// ============================================================
+
+export const getTrustedDevices = async (
+  req,
+  res
+) => {
+  try {
+    const admin =
+      await Admin.findById(
+        req.user._id
+      );
+
+    if (!admin) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Admin account not found",
+      });
+    }
+
+    await removeInactiveTrustedDevices(
+      admin
+    );
+
+    const currentDeviceId =
+      req.get("x-device-id");
+
+    const devices =
+      admin.trustedDevices.map(
+        (device) => ({
+          deviceId:
+            device.deviceId,
+
+          deviceName:
+            device.deviceName,
+
+          ipAddress:
+            device.ipAddress,
+
+          userAgent:
+            device.userAgent,
+
+          trustedAt:
+            device.trustedAt,
+
+          lastUsedAt:
+            device.lastUsedAt,
+
+          lastTwoFactorVerifiedAt:
+            device.lastTwoFactorVerifiedAt,
+
+          isCurrentDevice:
+            device.deviceId ===
+            currentDeviceId,
+        })
+      );
+
+    return res.json({
+      success: true,
+
+      data: {
+        devices,
+      },
+    });
+  } catch (error) {
+    console.error(
+      "Get trusted devices error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message:
+        "Failed to retrieve trusted devices",
+    });
+  }
+};
+
+// ============================================================
+// REMOVE OWN TRUSTED DEVICE
+// ============================================================
+
+export const removeTrustedDevice = async (
+  req,
+  res
+) => {
+  try {
+    const {
+      deviceId,
+    } = req.params;
+
+    if (!deviceId) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Device ID is required",
+      });
+    }
+
+    const admin =
+      await Admin.findById(
+        req.user._id
+      );
+
+    if (!admin) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Admin account not found",
+      });
+    }
+
+    const deviceIndex =
+      admin.trustedDevices.findIndex(
+        (device) =>
+          device.deviceId === deviceId
+      );
+
+    if (deviceIndex === -1) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Trusted device not found",
+      });
+    }
+
+    const removedDevice =
+      admin.trustedDevices[
+      deviceIndex
+      ];
+
+    admin.trustedDevices.splice(
+      deviceIndex,
+      1
+    );
+
+    await admin.save();
+
+    await AuditLog.create({
+      admin: admin._id,
+
+      action: "DELETE",
+
+      resource:
+        "TRUSTED_DEVICE",
+
+      resourceId:
+        admin._id,
+
+      description:
+        `Trusted device removed: ${removedDevice.deviceName}`,
+
+      ipAddress:
+        req.ip,
+
+      userAgent:
+        req.get("user-agent"),
+    });
+
+    return res.json({
+      success: true,
+
+      message:
+        "Trusted device removed successfully",
+    });
+  } catch (error) {
+    console.error(
+      "Remove trusted device error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message:
+        "Failed to remove trusted device",
+    });
+  }
+};
+
+// ============================================================
+// SUPER ADMIN REMOVE TRUSTED DEVICE
+// ============================================================
+
+export const removeAdminTrustedDevice = async (
+  req,
+  res
+) => {
+  try {
+    const {
+      adminId,
+      deviceId,
+    } = req.params;
+
+    if (!adminId || !deviceId) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Admin ID and device ID are required",
+      });
+    }
+
+    const requestingAdmin =
+      await Admin.findById(
+        req.user._id
+      );
+
+    if (!requestingAdmin) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Requesting admin not found",
+      });
+    }
+
+    if (
+      requestingAdmin.role !==
+      "SUPER_ADMIN"
+    ) {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Only SUPER_ADMIN can remove another admin's trusted device",
+      });
+    }
+
+    const admin =
+      await Admin.findById(
+        adminId
+      );
+
+    if (!admin) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Admin account not found",
+      });
+    }
+
+    const deviceIndex =
+      admin.trustedDevices.findIndex(
+        (device) =>
+          device.deviceId === deviceId
+      );
+
+    if (deviceIndex === -1) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Trusted device not found",
+      });
+    }
+
+    const removedDevice =
+      admin.trustedDevices[
+      deviceIndex
+      ];
+
+    admin.trustedDevices.splice(
+      deviceIndex,
+      1
+    );
+
+    await admin.save();
+
+    await AuditLog.create({
+      admin:
+        requestingAdmin._id,
+
+      action: "DELETE",
+
+      resource:
+        "TRUSTED_DEVICE",
+
+      resourceId:
+        admin._id,
+
+      description:
+        `SUPER_ADMIN removed trusted device ${removedDevice.deviceId} from admin ${admin.username}`,
+
+      ipAddress:
+        req.ip,
+
+      userAgent:
+        req.get("user-agent"),
+    });
+
+    return res.json({
+      success: true,
+
+      message:
+        "Admin trusted device removed successfully",
+    });
+  } catch (error) {
+    console.error(
+      "Super admin remove trusted device error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message:
+        "Failed to remove admin trusted device",
     });
   }
 };

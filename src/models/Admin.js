@@ -23,12 +23,17 @@ const trustedDeviceSchema = new mongoose.Schema(
             default: null,
         },
 
+        trustedAt: {
+            type: Date,
+            default: Date.now,
+        },
+
         lastUsedAt: {
             type: Date,
             default: Date.now,
         },
 
-        expiresAt: {
+        lastTwoFactorVerifiedAt: {
             type: Date,
             default: null,
         },

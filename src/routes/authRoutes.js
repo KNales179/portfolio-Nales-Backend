@@ -9,9 +9,15 @@ import {
     disableTwoFactor,
     getCurrentAdmin,
     logout,
+
+    // Trusted devices
+    getTrustedDevices,
+    addTrustedDevice,
+    removeTrustedDevice,
 } from "../controllers/authController.js";
 
 import { protect } from "../middleware/authMiddleware.js";
+
 import {
     loginRateLimiter,
     twoFactorRateLimiter,
@@ -80,6 +86,40 @@ router.post(
     protect,
     twoFactorRateLimiter,
     disableTwoFactor
+);
+
+// ============================================================
+// TRUSTED DEVICES
+// ============================================================
+//
+// These routes require an authenticated admin.
+//
+// GET    /trusted-devices
+// POST   /trusted-devices
+// DELETE /trusted-devices/:deviceId
+//
+// The frontend settings page can use these later.
+// ============================================================
+
+// GET TRUSTED DEVICES
+router.get(
+    "/trusted-devices",
+    protect,
+    getTrustedDevices
+);
+
+// MANUALLY ADD TRUSTED DEVICE
+router.post(
+    "/trusted-devices",
+    protect,
+    addTrustedDevice
+);
+
+// MANUALLY REMOVE TRUSTED DEVICE
+router.delete(
+    "/trusted-devices/:deviceId",
+    protect,
+    removeTrustedDevice
 );
 
 // ============================================================
