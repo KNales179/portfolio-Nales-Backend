@@ -2,15 +2,13 @@ import express from "express";
 
 import {
     getWorks,
-    getWorkById,
+    getArchivedWorks,
+    getWork,
 
     createWork,
     updateWork,
     archiveWork,
     restoreWork,
-    lockWork,
-    unlockWork,
-    reorderWorks,
 
     addParticipant,
     removeParticipant,
@@ -18,8 +16,9 @@ import {
 
     createTask,
     updateTask,
+    completeTask,
+    reopenTask,
     archiveTask,
-    restoreTask,
     reorderTasks,
 
     createSubtask,
@@ -27,10 +26,11 @@ import {
     completeSubtask,
     reopenSubtask,
     archiveSubtask,
-    restoreSubtask,
     reorderSubtasks,
 
-    getWorkActivities,
+    reorderWorks,
+
+    getWorkActivity,
 } from "../controllers/workController.js";
 
 import { protect } from "../middleware/authMiddleware.js";
@@ -42,18 +42,10 @@ const router = express.Router();
 // AUTHENTICATION
 // ============================================================
 //
-// All Work routes require an authenticated admin.
+// Every Work endpoint requires an authenticated admin.
 //
-// Authorization inside the controller determines whether the
-// authenticated admin is:
+// Permission checks are handled inside workController.js.
 //
-// - Superadmin
-// - Work creator / owner
-// - Participant
-// - Viewer
-//
-// Do NOT put role-specific authorization here unless we later
-// create dedicated middleware for it.
 // ============================================================
 
 router.use(protect);
@@ -66,47 +58,43 @@ router.use(protect);
 
 // GET /api/work
 //
-// Get all works the authenticated admin is allowed to see.
-//
-// Includes:
-// - active works
-// - progress
-// - participants
-// - creator
-// - lock state
-// - status
-//
+// Active works.
 router.get(
     "/",
     getWorks
 );
 
 
+// GET /api/work/archived
+//
+// Archived works.
+//
+// IMPORTANT:
+// This must come BEFORE "/:workId" so Express does not interpret
+// "archived" as a workId.
+router.get(
+    "/archived",
+    getArchivedWorks
+);
+
+
 // GET /api/work/:workId
 //
-// Get one Work and its complete hierarchy.
-//
-// Expected response can include:
-//
-// Work
-// ├── Tasks
-// │   └── Subtasks
-// ├── Participants
-// └── Activity
+// Single Work with:
+// - Work
+// - Tasks
+// - Subtasks
+// - Progress
 //
 router.get(
     "/:workId",
-    getWorkById
+    getWork
 );
 
 
 // POST /api/work
 //
-// Create a new Work.
-//
-// Creator automatically becomes the owner.
-//
-// Creator should also automatically become a participant.
+// Create Work.
 router.post(
     "/",
     createWork
@@ -115,15 +103,9 @@ router.post(
 
 // PATCH /api/work/:workId
 //
-// Update Work-level information.
+// Edit Work title/description.
 //
-// Important:
-// Participants cannot edit the Work title/description.
-//
-// Controller determines whether the requester is:
-// - creator
-// - superadmin
-//
+// Creator + Superadmin.
 router.patch(
     "/:workId",
     updateWork
@@ -131,17 +113,11 @@ router.patch(
 
 
 // ============================================================
-// WORK STATUS / LIFECYCLE
+// WORK LIFECYCLE
 // ============================================================
 
 
 // POST /api/work/:workId/archive
-//
-// Archive Work.
-//
-// Archived Work becomes read-only.
-//
-// Creator + Superadmin.
 router.post(
     "/:workId/archive",
     archiveWork
@@ -149,96 +125,18 @@ router.post(
 
 
 // POST /api/work/:workId/restore
-//
-// Restore archived Work.
-//
-// Restores the Work exactly as it was.
-//
-// Creator + Superadmin.
 router.post(
     "/:workId/restore",
     restoreWork
 );
 
 
-// POST /api/work/:workId/lock
-//
-// Lock Work.
-//
-// Prevents structural modifications:
-//
-// - add task
-// - add subtask
-// - edit task
-// - edit subtask
-// - reorder
-// - add links
-//
-// Still allows:
-// - reopen task
-// - reopen subtask
-// - comments
-//
-// Creator + Superadmin.
-router.post(
-    "/:workId/lock",
-    lockWork
-);
-
-
-// POST /api/work/:workId/unlock
-//
-// Unlock Work.
-//
-// Creator + Superadmin.
-router.post(
-    "/:workId/unlock",
-    unlockWork
-);
-
-
 // ============================================================
-// WORK ORDERING
-// ============================================================
-
-
-// PATCH /api/work/reorder
-//
-// Reorder Works.
-//
-// Only Superadmin.
-//
-// Body example:
-//
-// {
-//     "workIds": [
-//         "workId1",
-//         "workId2",
-//         "workId3"
-//     ]
-// }
-//
-router.patch(
-    "/reorder",
-    reorderWorks
-);
-
-
-// ============================================================
-// PARTICIPANTS
+// WORK PARTICIPANTS
 // ============================================================
 
 
 // POST /api/work/:workId/participants
-//
-// Add one or more admins as participants.
-//
-// Allowed:
-// - Work creator
-// - Superadmin
-//
-// Participants cannot add participants.
-//
 router.post(
     "/:workId/participants",
     addParticipant
@@ -246,16 +144,6 @@ router.post(
 
 
 // DELETE /api/work/:workId/participants/:adminId
-//
-// Remove a participant.
-//
-// Allowed:
-// - Work creator
-// - Superadmin
-//
-// Creator cannot simply remove themselves.
-// Ownership must be transferred first.
-//
 router.delete(
     "/:workId/participants/:adminId",
     removeParticipant
@@ -263,19 +151,33 @@ router.delete(
 
 
 // POST /api/work/:workId/transfer-ownership
-//
-// Transfer Work ownership.
-//
-// Allowed:
-// - Creator
-// - Superadmin
-//
-// Superadmin may transfer ownership even when the current
-// creator is inactive.
-//
 router.post(
     "/:workId/transfer-ownership",
     transferOwnership
+);
+
+
+// ============================================================
+// WORK REORDER
+// ============================================================
+
+
+// PATCH /api/work/reorder
+//
+// Body:
+//
+// {
+//     "orderedIds": [
+//         "workId1",
+//         "workId2",
+//         "workId3"
+//     ]
+// }
+//
+// Creator + Superadmin.
+router.patch(
+    "/reorder",
+    reorderWorks
 );
 
 
@@ -285,18 +187,6 @@ router.post(
 
 
 // POST /api/work/:workId/tasks
-//
-// Add a Task.
-//
-// Allowed:
-// - Creator
-// - Participant
-// - Superadmin
-//
-// Cannot be done while Work is:
-// - ARCHIVED
-// - LOCKED
-//
 router.post(
     "/:workId/tasks",
     createTask
@@ -304,64 +194,49 @@ router.post(
 
 
 // PATCH /api/work/:workId/tasks/:taskId
-//
-// Edit Task.
-//
-// Participants may edit Task information.
-//
-// Cannot edit while Work is archived or locked.
 router.patch(
     "/:workId/tasks/:taskId",
     updateTask
 );
 
 
+// POST /api/work/:workId/tasks/:taskId/complete
+//
+// Only valid for tasks WITHOUT subtasks.
+router.post(
+    "/:workId/tasks/:taskId/complete",
+    completeTask
+);
+
+
+// POST /api/work/:workId/tasks/:taskId/reopen
+//
+// Reopening is allowed even when Work is locked.
+router.post(
+    "/:workId/tasks/:taskId/reopen",
+    reopenTask
+);
+
+
 // POST /api/work/:workId/tasks/:taskId/archive
 //
-// Archive Task.
-//
-// Archived Task remains in database.
-//
-// Creator + Superadmin.
-//
-// Depending on controller rules, participants should not
-// archive structural data.
+// Archive instead of destroying the task.
 router.post(
     "/:workId/tasks/:taskId/archive",
     archiveTask
 );
 
 
-// POST /api/work/:workId/tasks/:taskId/restore
-//
-// Restore archived Task.
-//
-// Creator + Superadmin.
-router.post(
-    "/:workId/tasks/:taskId/restore",
-    restoreTask
-);
-
-
 // PATCH /api/work/:workId/tasks/reorder
-//
-// Reorder Tasks.
-//
-// Allowed:
-// - Work creator
-// - Superadmin
-//
-// Participants cannot reorder Tasks.
 //
 // Body:
 //
 // {
-//     "taskIds": [
+//     "orderedIds": [
 //         "taskId1",
 //         "taskId2"
 //     ]
 // }
-//
 router.patch(
     "/:workId/tasks/reorder",
     reorderTasks
@@ -374,15 +249,6 @@ router.patch(
 
 
 // POST /api/work/:workId/tasks/:taskId/subtasks
-//
-// Add Subtask.
-//
-// Allowed:
-// - Creator
-// - Participant
-// - Superadmin
-//
-// Cannot add while Work is locked/archived.
 router.post(
     "/:workId/tasks/:taskId/subtasks",
     createSubtask
@@ -390,15 +256,6 @@ router.post(
 
 
 // PATCH /api/work/:workId/tasks/:taskId/subtasks/:subtaskId
-//
-// Edit Subtask.
-//
-// Allowed:
-// - Creator
-// - Participant
-// - Superadmin
-//
-// Cannot edit while Work is locked/archived.
 router.patch(
     "/:workId/tasks/:taskId/subtasks/:subtaskId",
     updateSubtask
@@ -406,18 +263,6 @@ router.patch(
 
 
 // POST /api/work/:workId/tasks/:taskId/subtasks/:subtaskId/complete
-//
-// Complete Subtask.
-//
-// This automatically recalculates:
-//
-// Subtask
-// ↓
-// Task
-// ↓
-// Work
-//
-// No manual percentage.
 router.post(
     "/:workId/tasks/:taskId/subtasks/:subtaskId/complete",
     completeSubtask
@@ -425,12 +270,6 @@ router.post(
 
 
 // POST /api/work/:workId/tasks/:taskId/subtasks/:subtaskId/reopen
-//
-// Reopen Subtask.
-//
-// This can reopen the parent Task automatically.
-//
-// Locked Work still allows reopening.
 router.post(
     "/:workId/tasks/:taskId/subtasks/:subtaskId/reopen",
     reopenSubtask
@@ -438,49 +277,22 @@ router.post(
 
 
 // POST /api/work/:workId/tasks/:taskId/subtasks/:subtaskId/archive
-//
-// Archive Subtask.
-//
-// Data remains in database.
-//
-// Creator + Superadmin.
 router.post(
     "/:workId/tasks/:taskId/subtasks/:subtaskId/archive",
     archiveSubtask
 );
 
 
-// POST /api/work/:workId/tasks/:taskId/subtasks/:subtaskId/restore
-//
-// Restore Subtask.
-//
-// Creator + Superadmin.
-router.post(
-    "/:workId/tasks/:taskId/subtasks/:subtaskId/restore",
-    restoreSubtask
-);
-
-
 // PATCH /api/work/:workId/tasks/:taskId/subtasks/reorder
-//
-// Reorder Subtasks.
-//
-// Allowed:
-// - Creator
-// - Participants
-// - Superadmin
-//
-// Work must not be archived or locked.
 //
 // Body:
 //
 // {
-//     "subtaskIds": [
+//     "orderedIds": [
 //         "subtaskId1",
 //         "subtaskId2"
 //     ]
 // }
-//
 router.patch(
     "/:workId/tasks/:taskId/subtasks/reorder",
     reorderSubtasks
@@ -488,29 +300,16 @@ router.patch(
 
 
 // ============================================================
-// ACTIVITY LOG
+// WORK ACTIVITY
 // ============================================================
 
 
 // GET /api/work/:workId/activity
 //
-// Returns immutable WorkActivity history.
-//
-// Activity records are NEVER edited or deleted.
-//
-// Used by the Work UI to show:
-//
-// Admin changed task title
-//
-// Before:
-// "Implement authentication"
-//
-// After:
-// "Implement authentication middleware"
-//
+// Immutable WorkActivity history.
 router.get(
     "/:workId/activity",
-    getWorkActivities
+    getWorkActivity
 );
 
 
