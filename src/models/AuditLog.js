@@ -30,7 +30,12 @@ const auditLogSchema = new mongoose.Schema(
                 "TRUSTED_DEVICE_ADDED",
                 "TRUSTED_DEVICE_REMOVED",
 
+                "DEVICE_LOGOUT",
+
                 "PROFILE_UPDATE",
+
+                "SECURITY_VERIFICATION_SUCCESS",
+                "SECURITY_VERIFICATION_FAILED",
             ],
             required: true,
         },
@@ -39,6 +44,7 @@ const auditLogSchema = new mongoose.Schema(
             type: String,
             enum: [
                 "ADMIN",
+
                 "PROJECT",
                 "CERTIFICATE",
                 "SKILL",
@@ -50,6 +56,10 @@ const auditLogSchema = new mongoose.Schema(
                 "PROFILE",
                 "HERO",
                 "SYSTEM",
+
+                "WORK",
+                "WORK_TASK",
+                "WORK_SUBTASK",
             ],
             required: true,
         },
@@ -75,14 +85,32 @@ const auditLogSchema = new mongoose.Schema(
             type: String,
             default: null,
         },
+
+        metadata: {
+            type: mongoose.Schema.Types.Mixed,
+            default: {},
+        },
     },
     {
         timestamps: true,
     }
 );
 
-auditLogSchema.index({ createdAt: -1 });
-auditLogSchema.index({ admin: 1, createdAt: -1 });
-auditLogSchema.index({ resource: 1, resourceId: 1 });
+auditLogSchema.index({
+    createdAt: -1,
+});
 
-export default mongoose.model("AuditLog", auditLogSchema);
+auditLogSchema.index({
+    admin: 1,
+    createdAt: -1,
+});
+
+auditLogSchema.index({
+    resource: 1,
+    resourceId: 1,
+});
+
+export default mongoose.model(
+    "AuditLog",
+    auditLogSchema
+);

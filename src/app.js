@@ -5,6 +5,7 @@ import authRoutes from "./routes/authRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
 import heroRoutes from "./routes/heroRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
+import workRoutes from "./routes/workRoutes.js";
 
 const app = express();
 
@@ -36,5 +37,6 @@ app.use("/api/auth", authRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/hero", heroRoutes);
 app.use("/api/upload", uploadRoutes);
+app.use("/api/work", workRoutes);
 
 export default app;
