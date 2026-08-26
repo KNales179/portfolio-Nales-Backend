@@ -1,11 +1,8 @@
 import { BrevoClient } from "@getbrevo/brevo";
 
-const apiInstance = new brevo.TransactionalEmailsApi();
-
-apiInstance.setApiKey(
-  brevo.TransactionalEmailsApiApiKeys.apiKey,
-  process.env.BREVO_API_KEY
-);
+const brevo = new BrevoClient({
+  apiKey: process.env.BREVO_API_KEY,
+});
 
 const sendContactEmail = async ({
   name,
@@ -13,29 +10,26 @@ const sendContactEmail = async ({
   subject,
   message,
 }) => {
-  const sendSmtpEmail = new brevo.SendSmtpEmail();
+  return await brevo.transactionalEmails.sendTransacEmail({
+    subject: `Portfolio Contact: ${subject}`,
 
-  sendSmtpEmail.subject = `Portfolio Contact: ${subject}`;
-
-  sendSmtpEmail.sender = {
-    email: process.env.BREVO_SENDER_EMAIL,
-    name: process.env.BREVO_SENDER_NAME,
-  };
-
-  // YOUR email
-  sendSmtpEmail.to = [
-    {
-      email: process.env.CONTACT_EMAIL,
+    sender: {
+      email: process.env.BREVO_SENDER_EMAIL,
+      name: process.env.BREVO_SENDER_NAME,
     },
-  ];
 
-  // CLIENT'S email
-  sendSmtpEmail.replyTo = {
-    email,
-    name,
-  };
+    to: [
+      {
+        email: process.env.CONTACT_EMAIL,
+      },
+    ],
 
-  sendSmtpEmail.textContent = `
+    replyTo: {
+      email,
+      name,
+    },
+
+    textContent: `
 You received a new message through your portfolio.
 
 Name: ${name}
@@ -44,9 +38,8 @@ Subject: ${subject}
 
 Message:
 ${message}
-`;
-
-  return await apiInstance.sendTransacEmail(sendSmtpEmail);
+`,
+  });
 };
 
 export {
