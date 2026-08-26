@@ -113,11 +113,16 @@ const ensureWorkUnlocked = (work) => {
 // ============================================================
 // ACTIVITY LOGGER
 // ============================================================
+//
+// resourceType is now REQUIRED because WorkActivity's schema
+// requires it. Every call site below has been updated to pass it.
+//
 
 const createActivity = async ({
     work,
     admin,
     action,
+    resourceType,
     task = null,
     subtask = null,
     description,
@@ -133,6 +138,8 @@ const createActivity = async ({
             admin,
 
         action,
+
+        resourceType,
 
         task,
 
@@ -328,11 +335,22 @@ const syncTaskStatus = async (
 
         await task.save();
 
+        // Map the resulting status to the closest valid
+        // WorkActivity action. COMPLETED -> TASK_COMPLETED,
+        // PENDING (nothing done) -> TASK_REOPENED,
+        // IN_PROGRESS (partial) -> TASK_UPDATED.
+        const activityAction =
+            newStatus === "COMPLETED"
+                ? "TASK_COMPLETED"
+                : newStatus === "PENDING"
+                    ? "TASK_REOPENED"
+                    : "TASK_UPDATED";
+
         await createActivity({
             work,
             admin,
-            action:
-                "TASK_STATUS_CHANGED",
+            action: activityAction,
+            resourceType: "TASK",
             task: task._id,
             description:
                 `Task status changed from ${previousStatus} to ${newStatus}.`,
@@ -363,6 +381,13 @@ const syncTaskStatus = async (
 //
 // Adding a new task to completed work
 // automatically moves it back to IN_PROGRESS.
+//
+// NOTE: The Work model's status enum only allows
+// IN_PROGRESS / COMPLETED / ARCHIVED (no "PLANNED").
+// Setting work.status = "PLANNED" below will fail Work's
+// own schema validation on save. Left as-is for now since
+// this is a separate bug from the WorkActivity one — flagging
+// it here so it's not missed.
 //
 
 const syncWorkStatus = async (
@@ -416,7 +441,8 @@ const syncWorkStatus = async (
             work,
             admin,
             action:
-                "WORK_STATUS_CHANGED",
+                "WORK_UPDATED",
+            resourceType: "WORK",
             description:
                 `Work status changed from ${previousStatus} to ${work.status}.`,
             metadata: {
@@ -797,8 +823,9 @@ export const createWork =
                         password ||
                         null,
 
-                    participants: 
+                    participants:
                         req.user._id,
+
                 });
 
             await createActivity({
@@ -807,6 +834,7 @@ export const createWork =
                     req.user,
                 action:
                     "WORK_CREATED",
+                resourceType: "WORK",
                 description:
                     `Work "${work.title}" was created.`,
                 metadata: {
@@ -969,6 +997,7 @@ export const updateWork =
                     req.user,
                 action:
                     "WORK_UPDATED",
+                resourceType: "WORK",
                 description:
                     `Work "${work.title}" was updated.`,
                 metadata: {
@@ -1072,7 +1101,8 @@ export const archiveWork =
                 admin:
                     req.user,
                 action:
-                    "WORK_STATUS_CHANGED",
+                    "WORK_ARCHIVED",
+                resourceType: "WORK",
                 description:
                     `Work "${work.title}" was archived.`,
                 metadata: {
@@ -1176,7 +1206,8 @@ export const restoreWork =
                 admin:
                     req.user,
                 action:
-                    "WORK_STATUS_CHANGED",
+                    "WORK_RESTORED",
+                resourceType: "WORK",
                 description:
                     `Work "${work.title}" was restored.`,
                 metadata: {
@@ -1289,6 +1320,7 @@ export const lockWork =
                     req.user,
                 action:
                     "WORK_LOCKED",
+                resourceType: "WORK",
                 description:
                     `Work "${work.title}" was locked.`,
                 metadata: {
@@ -1397,6 +1429,7 @@ export const unlockWork =
                     req.user,
                 action:
                     "WORK_UNLOCKED",
+                resourceType: "WORK",
                 description:
                     `Work "${work.title}" was unlocked.`,
                 metadata: {
@@ -1528,6 +1561,7 @@ export const addParticipant =
                     req.user,
                 action:
                     "PARTICIPANT_ADDED",
+                resourceType: "PARTICIPANT",
                 description:
                     "An admin was added as a work participant.",
                 metadata: {
@@ -1647,6 +1681,7 @@ export const removeParticipant =
                     req.user,
                 action:
                     "PARTICIPANT_REMOVED",
+                resourceType: "PARTICIPANT",
                 description:
                     "A work participant was removed.",
                 metadata: {
@@ -1774,7 +1809,8 @@ export const transferOwnership =
                 admin:
                     req.user,
                 action:
-                    "WORK_OWNERSHIP_TRANSFERRED",
+                    "WORK_OWNER_CHANGED",
+                resourceType: "WORK",
                 description:
                     "Work ownership was transferred.",
                 metadata: {
@@ -1967,6 +2003,7 @@ export const createTask =
                     req.user,
                 action:
                     "TASK_CREATED",
+                resourceType: "TASK",
                 task:
                     task._id,
                 description:
@@ -2134,6 +2171,7 @@ export const updateTask =
                     req.user,
                 action:
                     "TASK_UPDATED",
+                resourceType: "TASK",
                 task:
                     task._id,
                 description:
@@ -2286,7 +2324,8 @@ export const completeTask =
                 admin:
                     req.user,
                 action:
-                    "TASK_STATUS_CHANGED",
+                    "TASK_COMPLETED",
+                resourceType: "TASK",
                 task:
                     task._id,
                 description:
@@ -2418,7 +2457,8 @@ export const reopenTask =
                 admin:
                     req.user,
                 action:
-                    "TASK_STATUS_CHANGED",
+                    "TASK_REOPENED",
+                resourceType: "TASK",
                 task:
                     task._id,
                 description:
@@ -2550,7 +2590,8 @@ export const archiveTask =
                 admin:
                     req.user,
                 action:
-                    "TASK_DELETED",
+                    "TASK_ARCHIVED",
+                resourceType: "TASK",
                 task:
                     task._id,
                 description:
@@ -2739,6 +2780,7 @@ export const createSubtask =
                     req.user,
                 action:
                     "SUBTASK_CREATED",
+                resourceType: "SUBTASK",
                 task:
                     task._id,
                 subtask:
@@ -2909,6 +2951,7 @@ export const updateSubtask =
                     req.user,
                 action:
                     "SUBTASK_UPDATED",
+                resourceType: "SUBTASK",
                 task:
                     task._id,
                 subtask:
@@ -3054,6 +3097,7 @@ export const completeSubtask =
                     req.user,
                 action:
                     "SUBTASK_COMPLETED",
+                resourceType: "SUBTASK",
                 task:
                     task._id,
                 subtask:
@@ -3204,7 +3248,8 @@ export const reopenSubtask =
                 admin:
                     req.user,
                 action:
-                    "SUBTASK_UNCOMPLETED",
+                    "SUBTASK_REOPENED",
+                resourceType: "SUBTASK",
                 task:
                     task._id,
                 subtask:
@@ -3349,7 +3394,8 @@ export const archiveSubtask =
                 admin:
                     req.user,
                 action:
-                    "SUBTASK_DELETED",
+                    "SUBTASK_ARCHIVED",
+                resourceType: "SUBTASK",
                 task:
                     task._id,
                 subtask:
@@ -3524,6 +3570,7 @@ export const reorderWorks =
                             req.user,
                         action:
                             "WORK_REORDERED",
+                        resourceType: "WORK",
                         description:
                             `Work "${work.title}" was reordered.`,
                         metadata: {
@@ -3668,6 +3715,7 @@ export const reorderTasks =
                     req.user,
                 action:
                     "TASK_REORDERED",
+                resourceType: "TASK",
                 description:
                     "Tasks were reordered.",
                 metadata: {
@@ -3820,6 +3868,7 @@ export const reorderSubtasks =
                     req.user,
                 action:
                     "SUBTASK_REORDERED",
+                resourceType: "SUBTASK",
                 task:
                     task._id,
                 description:
