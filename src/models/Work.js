@@ -128,6 +128,7 @@ const workSchema = new mongoose.Schema(
                 "COLLABORATIVE",
             ],
             default: "COLLABORATIVE",
+            required: true,
         },
 
         /*
