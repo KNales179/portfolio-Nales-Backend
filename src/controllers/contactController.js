@@ -1,4 +1,4 @@
-const { sendContactEmail } = require("../services/emailService");
+import { sendContactEmail } from "../services/emailService.js";
 
 const sendContactMessage = async (req, res) => {
   try {
@@ -41,6 +41,6 @@ const sendContactMessage = async (req, res) => {
   }
 };
 
-module.exports = {
+export {
   sendContactMessage,
 };

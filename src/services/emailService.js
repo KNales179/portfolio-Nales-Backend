@@ -1,4 +1,4 @@
-const brevo = require("@getbrevo/brevo");
+import brevo from "@getbrevo/brevo";
 
 const apiInstance = new brevo.TransactionalEmailsApi();
 
@@ -49,6 +49,6 @@ ${message}
   return await apiInstance.sendTransacEmail(sendSmtpEmail);
 };
 
-module.exports = {
+export {
   sendContactEmail,
 };
