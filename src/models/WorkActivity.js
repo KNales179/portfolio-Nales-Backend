@@ -324,16 +324,12 @@ const immutableOperationError = () => {
 
 workActivitySchema.pre(
     "save",
-    function (next) {
+    function () {
         if (!this.isNew) {
-            return next(
-                new Error(
-                    "WorkActivity is immutable and cannot be modified."
-                )
+            throw new Error(
+                "WorkActivity is immutable and cannot be modified."
             );
         }
-
-        next();
     }
 );
 
