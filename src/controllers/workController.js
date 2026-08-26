@@ -779,7 +779,7 @@ export const createWork =
                         description.trim(),
 
                     status:
-                        "PLANNED",
+                        "IN_PROGRESS",
 
                     order:
                         nextOrder,
@@ -787,29 +787,18 @@ export const createWork =
                     createdBy:
                         req.user._id,
 
-                    updatedBy:
+                    owner:
                         req.user._id,
 
-                    accessMode:
-                        accessMode ||
-                        "AUTHENTICATED",
+                    updatedBy:
+                        req.user._id,
 
                     password:
                         password ||
                         null,
 
-                    participants: [
-                        {
-                            admin:
-                                req.user._id,
-
-                            addedBy:
-                                req.user._id,
-
-                            addedAt:
-                                new Date(),
-                        },
-                    ],
+                    participants: 
+                        req.user._id,
                 });
 
             await createActivity({
