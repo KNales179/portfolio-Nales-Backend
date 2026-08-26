@@ -1,4 +1,4 @@
-import { sendContactEmail } from "../services/emailService.js";
+import { sendContactMessage } from "../services/emailService.js";
 
 const sendContactMessage = async (req, res) => {
   try {
@@ -17,7 +17,7 @@ const sendContactMessage = async (req, res) => {
       });
     }
 
-    await sendContactEmail({
+    await sendContactMessage({
       name,
       email,
       subject,
