@@ -98,7 +98,7 @@ const ensureWorkEditable = (work) => {
 
 
 const ensureWorkUnlocked = (work) => {
-    if (work.locked) {
+    if (work.isLocked) {
         return {
             allowed: false,
             message:
@@ -1326,13 +1326,16 @@ export const lockWork =
                 });
             }
 
-            if (work.locked) {
+            if (work.isLocked) {
                 return res.status(409).json({
                     success: false,
                     message:
                         "Work is already locked.",
                 });
             }
+
+            work.isLocked =
+                true;
 
             work.locked =
                 true;
@@ -1435,13 +1438,16 @@ export const unlockWork =
                 });
             }
 
-            if (!work.locked) {
+            if (!work.isLocked) {
                 return res.status(409).json({
                     success: false,
                     message:
                         "Work is not locked.",
                 });
             }
+
+            work.isLocked =
+                false;
 
             work.locked =
                 false;
@@ -2376,7 +2382,7 @@ export const completeTask =
             }
 
             if (
-                work.locked
+                work.isLocked
             ) {
                 return res.status(409).json({
                     success: false,
@@ -2691,7 +2697,7 @@ export const archiveTask =
             }
 
             if (
-                work.locked
+                work.isLocked
             ) {
                 return res.status(409).json({
                     success: false,
@@ -3332,7 +3338,7 @@ export const completeSubtask =
             }
 
             if (
-                work.locked
+                work.isLocked
             ) {
                 return res.status(409).json({
                     success: false,
@@ -3646,7 +3652,7 @@ export const archiveSubtask =
             }
 
             if (
-                work.locked
+                work.isLocked
             ) {
                 return res.status(409).json({
                     success: false,
@@ -4096,7 +4102,7 @@ export const reorderTasks =
             }
 
             if (
-                work.locked
+                work.isLocked
             ) {
                 return res.status(409).json({
                     success: false,
@@ -4249,7 +4255,7 @@ export const reorderSubtasks =
             }
 
             if (
-                work.locked
+                work.isLocked
             ) {
                 return res.status(409).json({
                     success: false,
