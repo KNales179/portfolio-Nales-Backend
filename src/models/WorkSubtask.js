@@ -34,6 +34,27 @@ const workSubtaskSchema = new mongoose.Schema(
 
 
         // ============================================================
+        // STATUS
+        // ============================================================
+
+        /*
+         * Used only for archive lifecycle (INCOMPLETE / ARCHIVED).
+         * Completion itself is tracked separately via `completed`
+         * below — this field does not flip to "COMPLETED".
+         */
+        status: {
+            type: String,
+            enum: [
+                "INCOMPLETE",
+                "COMPLETED",
+                "ARCHIVED",
+            ],
+            default: "INCOMPLETE",
+            required: true,
+        },
+
+
+        // ============================================================
         // COMPLETION
         // ============================================================
 
@@ -117,6 +138,11 @@ workSubtaskSchema.index({
 workSubtaskSchema.index({
     task: 1,
     completed: 1,
+});
+
+workSubtaskSchema.index({
+    task: 1,
+    status: 1,
 });
 
 workSubtaskSchema.index({

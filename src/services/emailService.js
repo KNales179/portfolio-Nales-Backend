@@ -41,7 +41,7 @@ const sendContactMessage = async ({
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-  <title>New Portfolio Message</title>
+  <title>Portfolio Message</title>
 </head>
 
 <body
@@ -113,7 +113,7 @@ const sendContactMessage = async ({
                         color: #ffffff;
                       "
                     >
-                      New Portfolio Message
+                      Portfolio Message
                     </div>
 
                   </td>
@@ -341,7 +341,7 @@ const sendContactMessage = async ({
 
     // Plain-text fallback
     textContent: `
-NEW PORTFOLIO MESSAGE
+PORTFOLIO MESSAGE
 =====================
 
 ${subject}

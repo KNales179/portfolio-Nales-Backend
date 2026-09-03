@@ -4,6 +4,8 @@ import Work from "../models/Work.js";
 import WorkTask from "../models/WorkTask.js";
 import WorkSubtask from "../models/WorkSubtask.js";
 import WorkActivity from "../models/WorkActivity.js";
+import WorkComment from "../models/WorkComment.js";
+import WorkLink from "../models/WorkLink.js";
 
 
 // ============================================================
@@ -107,6 +109,28 @@ const ensureWorkUnlocked = (work) => {
     return {
         allowed: true,
     };
+};
+
+
+const isValidHttpsUrl = (value) => {
+    if (
+        typeof value !== "string" ||
+        !value.trim()
+    ) {
+        return false;
+    }
+
+    try {
+        const parsed =
+            new URL(value.trim());
+
+        return (
+            parsed.protocol ===
+            "https:"
+        );
+    } catch {
+        return false;
+    }
 };
 
 
@@ -304,21 +328,14 @@ const syncTaskStatus = async (
                 subtask.completed
         );
 
-    const anyCompleted =
-        subtasks.some(
-            (subtask) =>
-                subtask.completed
-        );
+    // WorkTask's status enum is strictly INCOMPLETE / COMPLETED /
+    // ARCHIVED. Partial subtask progress is never stored on the
+    // task itself — only whether ALL active subtasks are done.
 
-    let newStatus;
-
-    if (allCompleted) {
-        newStatus = "COMPLETED";
-    } else if (anyCompleted) {
-        newStatus = "IN_PROGRESS";
-    } else {
-        newStatus = "PENDING";
-    }
+    const newStatus =
+        allCompleted
+            ? "COMPLETED"
+            : "INCOMPLETE";
 
     if (
         task.status !==
@@ -330,21 +347,28 @@ const syncTaskStatus = async (
         task.status =
             newStatus;
 
+        task.completed =
+            newStatus === "COMPLETED";
+
+        task.completedAt =
+            newStatus === "COMPLETED"
+                ? new Date()
+                : null;
+
+        task.completedBy =
+            newStatus === "COMPLETED"
+                ? admin._id
+                : null;
+
         task.updatedBy =
             admin._id;
 
         await task.save();
 
-        // Map the resulting status to the closest valid
-        // WorkActivity action. COMPLETED -> TASK_COMPLETED,
-        // PENDING (nothing done) -> TASK_REOPENED,
-        // IN_PROGRESS (partial) -> TASK_UPDATED.
         const activityAction =
             newStatus === "COMPLETED"
                 ? "TASK_COMPLETED"
-                : newStatus === "PENDING"
-                    ? "TASK_REOPENED"
-                    : "TASK_UPDATED";
+                : "TASK_REOPENED";
 
         await createActivity({
             work,
@@ -823,8 +847,18 @@ export const createWork =
                         password ||
                         null,
 
-                    participants:
-                        req.user._id,
+                    participants: [
+                        {
+                            admin:
+                                req.user._id,
+
+                            addedBy:
+                                req.user._id,
+
+                            addedAt:
+                                new Date(),
+                        },
+                    ],
 
                 });
 
@@ -1468,6 +1502,77 @@ export const unlockWork =
 
 
 // ============================================================
+// GET WORK PARTICIPANTS
+// ============================================================
+
+export const getWorkParticipants =
+    async (
+        req,
+        res
+    ) => {
+        try {
+            const {
+                workId,
+            } = req.params;
+
+            if (
+                !isValidObjectId(
+                    workId
+                )
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Invalid work ID.",
+                });
+            }
+
+            const work =
+                await Work.findById(
+                    workId
+                )
+                    .populate(
+                        "createdBy",
+                        "username fullName role status"
+                    )
+                    .populate(
+                        "participants.admin",
+                        "username fullName role status"
+                    );
+
+            if (!work) {
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        "Work not found.",
+                });
+            }
+
+            return res.json({
+                success: true,
+                data: {
+                    creator:
+                        work.createdBy,
+                    participants:
+                        work.participants,
+                },
+            });
+        } catch (error) {
+            console.error(
+                "Get work participants error:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    "Failed to load participants.",
+            });
+        }
+    };
+
+
+// ============================================================
 // ADD PARTICIPANT
 // ============================================================
 
@@ -1970,7 +2075,7 @@ export const createTask =
                         description.trim(),
 
                     status:
-                        "PENDING",
+                        "INCOMPLETE",
 
                     order,
 
@@ -2314,6 +2419,15 @@ export const completeTask =
             task.status =
                 "COMPLETED";
 
+            task.completed =
+                true;
+
+            task.completedAt =
+                new Date();
+
+            task.completedBy =
+                req.user._id;
+
             task.updatedBy =
                 req.user._id;
 
@@ -2445,7 +2559,16 @@ export const reopenTask =
                 task.status;
 
             task.status =
-                "PENDING";
+                "INCOMPLETE";
+
+            task.completed =
+                false;
+
+            task.completedAt =
+                null;
+
+            task.completedBy =
+                null;
 
             task.updatedBy =
                 req.user._id;
@@ -2470,7 +2593,7 @@ export const reopenTask =
                     },
                     after: {
                         status:
-                            "PENDING",
+                            "INCOMPLETE",
                     },
                 },
             });
@@ -2580,6 +2703,12 @@ export const archiveTask =
             task.status =
                 "ARCHIVED";
 
+            task.archivedAt =
+                new Date();
+
+            task.archivedBy =
+                req.user._id;
+
             task.updatedBy =
                 req.user._id;
 
@@ -2622,6 +2751,142 @@ export const archiveTask =
                 success: false,
                 message:
                     "Failed to archive task.",
+            });
+        }
+    };
+
+
+// ============================================================
+// RESTORE TASK
+// ============================================================
+
+export const restoreTask =
+    async (
+        req,
+        res
+    ) => {
+        try {
+            const task =
+                await WorkTask.findById(
+                    req.params.taskId
+                );
+
+            if (!task) {
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        "Task not found.",
+                });
+            }
+
+            const work =
+                await Work.findById(
+                    task.work
+                );
+
+            if (!work) {
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        "Work not found.",
+                });
+            }
+
+            if (
+                !canManageWork(
+                    work,
+                    req.user
+                )
+            ) {
+                return res.status(403).json({
+                    success: false,
+                    message:
+                        "Only the work creator or Superadmin can restore tasks.",
+                });
+            }
+
+            if (
+                work.status ===
+                "ARCHIVED"
+            ) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        "Archived work is read-only.",
+                });
+            }
+
+            if (
+                task.status !==
+                "ARCHIVED"
+            ) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        "Task is not archived.",
+                });
+            }
+
+            task.status =
+                task.completed
+                    ? "COMPLETED"
+                    : "INCOMPLETE";
+
+            task.archivedAt =
+                null;
+
+            task.archivedBy =
+                null;
+
+            task.updatedBy =
+                req.user._id;
+
+            await task.save();
+
+            await createActivity({
+                work,
+                admin:
+                    req.user,
+                action:
+                    "TASK_RESTORED",
+                resourceType: "TASK",
+                task:
+                    task._id,
+                description:
+                    `Task "${task.title}" was restored.`,
+                metadata: {
+                    archived:
+                        false,
+                },
+            });
+
+            await syncWorkStatus(
+                work._id,
+                req.user
+            );
+
+            return res.json({
+                success: true,
+                message:
+                    "Task restored successfully.",
+                data: {
+                    task,
+                    progress:
+                        await calculateWorkProgress(
+                            work._id
+                        ),
+                },
+            });
+        } catch (error) {
+            console.error(
+                "Restore task error:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    "Failed to restore task.",
             });
         }
     };
@@ -2762,12 +3027,21 @@ export const createSubtask =
                         req.user._id,
                 });
 
-            // Adding a subtask to a task
-            // means its completion is now
-            // controlled by subtasks.
+            // Adding a subtask means completion is now derived
+            // from subtasks. The new subtask starts incomplete,
+            // so the task becomes/remains INCOMPLETE.
 
             task.status =
-                "IN_PROGRESS";
+                "INCOMPLETE";
+
+            task.completed =
+                false;
+
+            task.completedAt =
+                null;
+
+            task.completedBy =
+                null;
 
             task.updatedBy =
                 req.user._id;
@@ -3384,6 +3658,12 @@ export const archiveSubtask =
             subtask.status =
                 "ARCHIVED";
 
+            subtask.archivedAt =
+                new Date();
+
+            subtask.archivedBy =
+                req.user._id;
+
             subtask.updatedBy =
                 req.user._id;
 
@@ -3434,6 +3714,163 @@ export const archiveSubtask =
                 success: false,
                 message:
                     "Failed to archive subtask.",
+            });
+        }
+    };
+
+
+// ============================================================
+// RESTORE SUBTASK
+// ============================================================
+
+export const restoreSubtask =
+    async (
+        req,
+        res
+    ) => {
+        try {
+            const subtask =
+                await WorkSubtask.findById(
+                    req.params.subtaskId
+                );
+
+            if (!subtask) {
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        "Subtask not found.",
+                });
+            }
+
+            const task =
+                await WorkTask.findById(
+                    subtask.task
+                );
+
+            if (!task) {
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        "Task not found.",
+                });
+            }
+
+            const work =
+                await Work.findById(
+                    task.work
+                );
+
+            if (!work) {
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        "Work not found.",
+                });
+            }
+
+            if (
+                !canManageWork(
+                    work,
+                    req.user
+                )
+            ) {
+                return res.status(403).json({
+                    success: false,
+                    message:
+                        "Only the work creator or Superadmin can restore subtasks.",
+                });
+            }
+
+            if (
+                work.status ===
+                "ARCHIVED"
+            ) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        "Archived work is read-only.",
+                });
+            }
+
+            if (
+                subtask.status !==
+                "ARCHIVED"
+            ) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        "Subtask is not archived.",
+                });
+            }
+
+            subtask.status =
+                subtask.completed
+                    ? "COMPLETED"
+                    : "INCOMPLETE";
+
+            subtask.archivedAt =
+                null;
+
+            subtask.archivedBy =
+                null;
+
+            subtask.updatedBy =
+                req.user._id;
+
+            await subtask.save();
+
+            await createActivity({
+                work,
+                admin:
+                    req.user,
+                action:
+                    "SUBTASK_RESTORED",
+                resourceType: "SUBTASK",
+                task:
+                    task._id,
+                subtask:
+                    subtask._id,
+                description:
+                    `Subtask "${subtask.title}" was restored.`,
+                metadata: {
+                    archived:
+                        false,
+                },
+            });
+
+            await syncTaskStatus(
+                task._id,
+                req.user,
+                work
+            );
+
+            await syncWorkStatus(
+                work._id,
+                req.user
+            );
+
+            return res.json({
+                success: true,
+                message:
+                    "Subtask restored successfully.",
+                data: {
+                    subtask,
+                    progress:
+                        await calculateWorkProgress(
+                            work._id
+                        ),
+                },
+            });
+        } catch (error) {
+            console.error(
+                "Restore subtask error:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    "Failed to restore subtask.",
             });
         }
     };
@@ -3967,6 +4404,963 @@ export const getWorkActivity =
                 success: false,
                 message:
                     "Failed to load work activity.",
+            });
+        }
+    };
+
+
+// ============================================================
+// GET WORK COMMENTS
+// ============================================================
+
+export const getWorkComments =
+    async (
+        req,
+        res
+    ) => {
+        try {
+            const {
+                workId,
+            } = req.params;
+
+            if (
+                !isValidObjectId(
+                    workId
+                )
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Invalid work ID.",
+                });
+            }
+
+            const work =
+                await Work.findById(
+                    workId
+                );
+
+            if (!work) {
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        "Work not found.",
+                });
+            }
+
+            const comments =
+                await WorkComment.find({
+                    work:
+                        work._id,
+                })
+                    .populate(
+                        "admin",
+                        "username fullName role"
+                    )
+                    .sort({
+                        createdAt: 1,
+                    });
+
+            return res.json({
+                success: true,
+                data: {
+                    comments,
+                },
+            });
+        } catch (error) {
+            console.error(
+                "Get work comments error:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    "Failed to load comments.",
+            });
+        }
+    };
+
+
+// ============================================================
+// CREATE WORK COMMENT
+// ============================================================
+
+export const createWorkComment =
+    async (
+        req,
+        res
+    ) => {
+        try {
+            const {
+                workId,
+            } = req.params;
+
+            const {
+                description,
+            } = req.body;
+
+            const work =
+                await Work.findById(
+                    workId
+                );
+
+            if (!work) {
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        "Work not found.",
+                });
+            }
+
+            if (
+                work.status ===
+                "ARCHIVED"
+            ) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        "Archived work is read-only.",
+                });
+            }
+
+            if (
+                !description?.trim()
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Comment cannot be empty.",
+                });
+            }
+
+            const comment =
+                await WorkComment.create({
+                    work:
+                        work._id,
+
+                    admin:
+                        req.user._id,
+
+                    description:
+                        description.trim(),
+                });
+
+            await createActivity({
+                work,
+                admin:
+                    req.user,
+                action:
+                    "COMMENT_CREATED",
+                resourceType: "COMMENT",
+                description:
+                    "A comment was added.",
+                metadata: {
+                    resourceId:
+                        comment._id,
+                    after: {
+                        description:
+                            comment.description,
+                    },
+                },
+            });
+
+            await comment.populate(
+                "admin",
+                "username fullName role"
+            );
+
+            return res.status(201).json({
+                success: true,
+                message:
+                    "Comment added successfully.",
+                data: {
+                    comment,
+                },
+            });
+        } catch (error) {
+            console.error(
+                "Create work comment error:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    "Failed to add comment.",
+            });
+        }
+    };
+
+
+// ============================================================
+// UPDATE WORK COMMENT
+// ============================================================
+
+export const updateWorkComment =
+    async (
+        req,
+        res
+    ) => {
+        try {
+            const {
+                commentId,
+            } = req.params;
+
+            const {
+                description,
+            } = req.body;
+
+            const comment =
+                await WorkComment.findById(
+                    commentId
+                );
+
+            if (!comment) {
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        "Comment not found.",
+                });
+            }
+
+            const isAuthor =
+                comment.admin.toString() ===
+                req.user._id.toString();
+
+            if (
+                !isAuthor &&
+                !isSuperAdmin(
+                    req.user
+                )
+            ) {
+                return res.status(403).json({
+                    success: false,
+                    message:
+                        "You do not have permission to edit this comment.",
+                });
+            }
+
+            if (
+                !description?.trim()
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Comment cannot be empty.",
+                });
+            }
+
+            const work =
+                await Work.findById(
+                    comment.work
+                );
+
+            const before = {
+                description:
+                    comment.description,
+            };
+
+            comment.description =
+                description.trim();
+
+            await comment.save();
+
+            if (work) {
+                await createActivity({
+                    work,
+                    admin:
+                        req.user,
+                    action:
+                        "COMMENT_UPDATED",
+                    resourceType: "COMMENT",
+                    description:
+                        "A comment was updated.",
+                    metadata: {
+                        resourceId:
+                            comment._id,
+                        before,
+                        after: {
+                            description:
+                                comment.description,
+                        },
+                    },
+                });
+            }
+
+            await comment.populate(
+                "admin",
+                "username fullName role"
+            );
+
+            return res.json({
+                success: true,
+                message:
+                    "Comment updated successfully.",
+                data: {
+                    comment,
+                },
+            });
+        } catch (error) {
+            console.error(
+                "Update work comment error:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    "Failed to update comment.",
+            });
+        }
+    };
+
+
+// ============================================================
+// DELETE WORK COMMENT
+// ============================================================
+
+export const deleteWorkComment =
+    async (
+        req,
+        res
+    ) => {
+        try {
+            const {
+                commentId,
+            } = req.params;
+
+            const comment =
+                await WorkComment.findById(
+                    commentId
+                );
+
+            if (!comment) {
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        "Comment not found.",
+                });
+            }
+
+            const isAuthor =
+                comment.admin.toString() ===
+                req.user._id.toString();
+
+            if (
+                !isAuthor &&
+                !isSuperAdmin(
+                    req.user
+                )
+            ) {
+                return res.status(403).json({
+                    success: false,
+                    message:
+                        "You do not have permission to delete this comment.",
+                });
+            }
+
+            const work =
+                await Work.findById(
+                    comment.work
+                );
+
+            await WorkComment.findByIdAndDelete(
+                commentId
+            );
+
+            if (work) {
+                await createActivity({
+                    work,
+                    admin:
+                        req.user,
+                    action:
+                        "COMMENT_DELETED",
+                    resourceType: "COMMENT",
+                    description:
+                        "A comment was deleted.",
+                    metadata: {
+                        resourceId:
+                            commentId,
+                        before: {
+                            description:
+                                comment.description,
+                        },
+                    },
+                });
+            }
+
+            return res.json({
+                success: true,
+                message:
+                    "Comment deleted successfully.",
+            });
+        } catch (error) {
+            console.error(
+                "Delete work comment error:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    "Failed to delete comment.",
+            });
+        }
+    };
+
+
+// ============================================================
+// GET WORK LINKS
+// ============================================================
+
+export const getWorkLinks =
+    async (
+        req,
+        res
+    ) => {
+        try {
+            const {
+                workId,
+            } = req.params;
+
+            if (
+                !isValidObjectId(
+                    workId
+                )
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Invalid work ID.",
+                });
+            }
+
+            const work =
+                await Work.findById(
+                    workId
+                );
+
+            if (!work) {
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        "Work not found.",
+                });
+            }
+
+            const links =
+                await WorkLink.find({
+                    work:
+                        work._id,
+                })
+                    .populate(
+                        "createdBy",
+                        "username fullName"
+                    )
+                    .sort({
+                        createdAt: 1,
+                    });
+
+            return res.json({
+                success: true,
+                data: {
+                    links,
+                },
+            });
+        } catch (error) {
+            console.error(
+                "Get work links error:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    "Failed to load links.",
+            });
+        }
+    };
+
+
+// ============================================================
+// CREATE WORK LINK
+// ============================================================
+
+export const createWorkLink =
+    async (
+        req,
+        res
+    ) => {
+        try {
+            const {
+                workId,
+            } = req.params;
+
+            const {
+                title,
+                url,
+                description,
+            } = req.body;
+
+            const work =
+                await Work.findById(
+                    workId
+                );
+
+            if (!work) {
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        "Work not found.",
+                });
+            }
+
+            if (
+                !canEditWork(
+                    work,
+                    req.user
+                )
+            ) {
+                return res.status(403).json({
+                    success: false,
+                    message:
+                        "You do not have permission to add links.",
+                });
+            }
+
+            let check =
+                ensureWorkEditable(
+                    work
+                );
+
+            if (!check.allowed) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        check.message,
+                });
+            }
+
+            check =
+                ensureWorkUnlocked(
+                    work
+                );
+
+            if (!check.allowed) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        check.message,
+                });
+            }
+
+            if (
+                !title?.trim()
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Link title is required.",
+                });
+            }
+
+            if (
+                !isValidHttpsUrl(
+                    url
+                )
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Please provide a valid HTTPS URL.",
+                });
+            }
+
+            const link =
+                await WorkLink.create({
+                    work:
+                        work._id,
+
+                    title:
+                        title.trim(),
+
+                    url:
+                        url.trim(),
+
+                    description:
+                        description?.trim() ||
+                        "",
+
+                    createdBy:
+                        req.user._id,
+
+                    updatedBy:
+                        req.user._id,
+                });
+
+            await createActivity({
+                work,
+                admin:
+                    req.user,
+                action:
+                    "LINK_CREATED",
+                resourceType: "LINK",
+                description:
+                    `Link "${link.title}" was added.`,
+                metadata: {
+                    resourceId:
+                        link._id,
+                    after: {
+                        title:
+                            link.title,
+                        url:
+                            link.url,
+                    },
+                },
+            });
+
+            await link.populate(
+                "createdBy",
+                "username fullName"
+            );
+
+            return res.status(201).json({
+                success: true,
+                message:
+                    "Link added successfully.",
+                data: {
+                    link,
+                },
+            });
+        } catch (error) {
+            console.error(
+                "Create work link error:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    "Failed to add link.",
+            });
+        }
+    };
+
+
+// ============================================================
+// UPDATE WORK LINK
+// ============================================================
+
+export const updateWorkLink =
+    async (
+        req,
+        res
+    ) => {
+        try {
+            const {
+                linkId,
+            } = req.params;
+
+            const link =
+                await WorkLink.findById(
+                    linkId
+                );
+
+            if (!link) {
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        "Link not found.",
+                });
+            }
+
+            const work =
+                await Work.findById(
+                    link.work
+                );
+
+            if (!work) {
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        "Work not found.",
+                });
+            }
+
+            if (
+                !canEditWork(
+                    work,
+                    req.user
+                )
+            ) {
+                return res.status(403).json({
+                    success: false,
+                    message:
+                        "You do not have permission to edit this link.",
+                });
+            }
+
+            let check =
+                ensureWorkEditable(
+                    work
+                );
+
+            if (!check.allowed) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        check.message,
+                });
+            }
+
+            check =
+                ensureWorkUnlocked(
+                    work
+                );
+
+            if (!check.allowed) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        check.message,
+                });
+            }
+
+            const before = {
+                title:
+                    link.title,
+
+                url:
+                    link.url,
+
+                description:
+                    link.description,
+            };
+
+            if (
+                req.body.title !==
+                undefined
+            ) {
+                if (
+                    !req.body.title?.trim()
+                ) {
+                    return res.status(400).json({
+                        success: false,
+                        message:
+                            "Link title cannot be empty.",
+                    });
+                }
+
+                link.title =
+                    req.body.title.trim();
+            }
+
+            if (
+                req.body.url !==
+                undefined
+            ) {
+                if (
+                    !isValidHttpsUrl(
+                        req.body.url
+                    )
+                ) {
+                    return res.status(400).json({
+                        success: false,
+                        message:
+                            "Please provide a valid HTTPS URL.",
+                    });
+                }
+
+                link.url =
+                    req.body.url.trim();
+            }
+
+            if (
+                req.body.description !==
+                undefined
+            ) {
+                link.description =
+                    req.body.description?.trim() ||
+                    "";
+            }
+
+            link.updatedBy =
+                req.user._id;
+
+            await link.save();
+
+            await createActivity({
+                work,
+                admin:
+                    req.user,
+                action:
+                    "LINK_UPDATED",
+                resourceType: "LINK",
+                description:
+                    `Link "${link.title}" was updated.`,
+                metadata: {
+                    resourceId:
+                        link._id,
+                    before,
+                    after: {
+                        title:
+                            link.title,
+                        url:
+                            link.url,
+                        description:
+                            link.description,
+                    },
+                },
+            });
+
+            await link.populate(
+                "createdBy",
+                "username fullName"
+            );
+
+            return res.json({
+                success: true,
+                message:
+                    "Link updated successfully.",
+                data: {
+                    link,
+                },
+            });
+        } catch (error) {
+            console.error(
+                "Update work link error:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    "Failed to update link.",
+            });
+        }
+    };
+
+
+// ============================================================
+// DELETE WORK LINK
+// ============================================================
+
+export const deleteWorkLink =
+    async (
+        req,
+        res
+    ) => {
+        try {
+            const {
+                linkId,
+            } = req.params;
+
+            const link =
+                await WorkLink.findById(
+                    linkId
+                );
+
+            if (!link) {
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        "Link not found.",
+                });
+            }
+
+            const work =
+                await Work.findById(
+                    link.work
+                );
+
+            if (!work) {
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        "Work not found.",
+                });
+            }
+
+            if (
+                !canEditWork(
+                    work,
+                    req.user
+                )
+            ) {
+                return res.status(403).json({
+                    success: false,
+                    message:
+                        "You do not have permission to remove this link.",
+                });
+            }
+
+            let check =
+                ensureWorkEditable(
+                    work
+                );
+
+            if (!check.allowed) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        check.message,
+                });
+            }
+
+            check =
+                ensureWorkUnlocked(
+                    work
+                );
+
+            if (!check.allowed) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        check.message,
+                });
+            }
+
+            await WorkLink.findByIdAndDelete(
+                linkId
+            );
+
+            await createActivity({
+                work,
+                admin:
+                    req.user,
+                action:
+                    "LINK_DELETED",
+                resourceType: "LINK",
+                description:
+                    `Link "${link.title}" was removed.`,
+                metadata: {
+                    resourceId:
+                        linkId,
+                    before: {
+                        title:
+                            link.title,
+                        url:
+                            link.url,
+                    },
+                },
+            });
+
+            return res.json({
+                success: true,
+                message:
+                    "Link removed successfully.",
+            });
+        } catch (error) {
+            console.error(
+                "Delete work link error:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    "Failed to remove link.",
             });
         }
     };

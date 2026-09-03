@@ -95,8 +95,22 @@ const workSchema = new mongoose.Schema(
 
         participants: [
             {
-                type: mongoose.Schema.Types.ObjectId,
-                ref: "Admin",
+                admin: {
+                    type: mongoose.Schema.Types.ObjectId,
+                    ref: "Admin",
+                    required: true,
+                },
+
+                addedBy: {
+                    type: mongoose.Schema.Types.ObjectId,
+                    ref: "Admin",
+                    required: true,
+                },
+
+                addedAt: {
+                    type: Date,
+                    default: Date.now,
+                },
             },
         ],
 
@@ -227,7 +241,7 @@ workSchema.index({
 });
 
 workSchema.index({
-    participants: 1,
+    "participants.admin": 1,
 });
 
 workSchema.index({
