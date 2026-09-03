@@ -9,6 +9,8 @@ import {
     updateWork,
     archiveWork,
     restoreWork,
+    lockWork,
+    unlockWork,
 
     getWorkParticipants,
     addParticipant,
@@ -141,6 +143,20 @@ router.post(
 router.post(
     "/:workId/restore",
     restoreWork
+);
+
+
+// POST /api/work/:workId/lock
+router.post(
+    "/:workId/lock",
+    lockWork
+);
+
+
+// POST /api/work/:workId/unlock
+router.post(
+    "/:workId/unlock",
+    unlockWork
 );
 
 
