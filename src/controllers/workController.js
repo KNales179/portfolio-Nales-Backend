@@ -442,10 +442,7 @@ const syncWorkStatus = async (
     const previousStatus =
         work.status;
 
-    if (progress === 0) {
-        work.status =
-            "PLANNED";
-    } else if (progress === 100) {
+    if (progress === 100) {
         work.status =
             "COMPLETED";
     } else {
