@@ -504,15 +504,15 @@ export const getWorks =
                 })
                     .populate(
                         "createdBy",
-                        "username fullName role"
+                        "username fullName role profileImage"
                     )
                     .populate(
                         "updatedBy",
-                        "username fullName"
+                        "username fullName profileImage"
                     )
                     .populate(
                         "participants.admin",
-                        "username fullName role"
+                        "username fullName role profileImage"
                     )
                     .sort({
                         order: 1,
@@ -571,11 +571,11 @@ export const getArchivedWorks =
                 })
                     .populate(
                         "createdBy",
-                        "username fullName role"
+                        "username fullName role profileImage"
                     )
                     .populate(
                         "participants.admin",
-                        "username fullName role"
+                        "username fullName role profileImage"
                     )
                     .sort({
                         order: 1,
@@ -649,15 +649,15 @@ export const getWork =
                 )
                     .populate(
                         "createdBy",
-                        "username fullName role status"
+                        "username fullName role status profileImage"
                     )
                     .populate(
                         "updatedBy",
-                        "username fullName"
+                        "username fullName profileImage"
                     )
                     .populate(
                         "participants.admin",
-                        "username fullName role status"
+                        "username fullName role status profileImage"
                     );
 
             if (!work) {
@@ -1536,11 +1536,11 @@ export const getWorkParticipants =
                 )
                     .populate(
                         "createdBy",
-                        "username fullName role status"
+                        "username fullName role status profileImage"
                     )
                     .populate(
                         "participants.admin",
-                        "username fullName role status"
+                        "username fullName role status profileImage"
                     );
 
             if (!work) {
@@ -4458,7 +4458,7 @@ export const getWorkComments =
                 })
                     .populate(
                         "admin",
-                        "username fullName role"
+                        "username fullName role profileImage"
                     )
                     .sort({
                         createdAt: 1,
@@ -4570,7 +4570,7 @@ export const createWorkComment =
 
             await comment.populate(
                 "admin",
-                "username fullName role"
+                "username fullName role profileImage"
             );
 
             return res.status(201).json({
