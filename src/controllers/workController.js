@@ -2896,6 +2896,107 @@ export const restoreTask =
 
 
 // ============================================================
+// GET ARCHIVED TASKS (for a Work)
+// ============================================================
+
+export const getArchivedTasks =
+    async (
+        req,
+        res
+    ) => {
+        try {
+            const {
+                workId,
+            } = req.params;
+
+            const work =
+                await Work.findById(
+                    workId
+                );
+
+            if (!work) {
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        "Work not found.",
+                });
+            }
+
+            const tasks =
+                await WorkTask.find({
+                    work: work._id,
+                    status: "ARCHIVED",
+                })
+                    .populate(
+                        "createdBy",
+                        "username fullName profileImage"
+                    )
+                    .populate(
+                        "archivedBy",
+                        "username fullName profileImage"
+                    )
+                    .sort({
+                        archivedAt: -1,
+                    });
+
+            const taskIds =
+                tasks.map(
+                    (task) => task._id
+                );
+
+            const subtasks =
+                taskIds.length
+                    ? await WorkSubtask.find({
+                        task: {
+                            $in: taskIds,
+                        },
+                    })
+                        .sort({
+                            order: 1,
+                        })
+                    : [];
+
+            const tasksWithSubtasks =
+                tasks.map(
+                    (task) => {
+                        const taskSubtasks =
+                            subtasks.filter(
+                                (subtask) =>
+                                    subtask.task.toString() ===
+                                    task._id.toString()
+                            );
+
+                        return {
+                            ...task.toObject(),
+                            subtasks:
+                                taskSubtasks,
+                        };
+                    }
+                );
+
+            return res.json({
+                success: true,
+                data: {
+                    tasks:
+                        tasksWithSubtasks,
+                },
+            });
+        } catch (error) {
+            console.error(
+                "Get archived tasks error:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    "Failed to load archived tasks.",
+            });
+        }
+    };
+
+
+// ============================================================
 // CREATE SUBTASK
 // ============================================================
 
@@ -3880,6 +3981,71 @@ export const restoreSubtask =
 
 
 // ============================================================
+// GET ARCHIVED SUBTASKS (for a Task)
+// ============================================================
+
+export const getArchivedSubtasks =
+    async (
+        req,
+        res
+    ) => {
+        try {
+            const {
+                taskId,
+            } = req.params;
+
+            const task =
+                await WorkTask.findById(
+                    taskId
+                );
+
+            if (!task) {
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        "Task not found.",
+                });
+            }
+
+            const subtasks =
+                await WorkSubtask.find({
+                    task: task._id,
+                    status: "ARCHIVED",
+                })
+                    .populate(
+                        "createdBy",
+                        "username fullName profileImage"
+                    )
+                    .populate(
+                        "archivedBy",
+                        "username fullName profileImage"
+                    )
+                    .sort({
+                        archivedAt: -1,
+                    });
+
+            return res.json({
+                success: true,
+                data: {
+                    subtasks,
+                },
+            });
+        } catch (error) {
+            console.error(
+                "Get archived subtasks error:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    "Failed to load archived subtasks.",
+            });
+        }
+    };
+
+
+// ============================================================
 // REORDER WORKS
 // ============================================================
 //
@@ -4595,7 +4761,7 @@ export const createWorkComment =
         }
     };
 
-
+f
 // ============================================================
 // UPDATE WORK COMMENT
 // ============================================================
@@ -5364,6 +5530,249 @@ export const deleteWorkLink =
                 success: false,
                 message:
                     "Failed to remove link.",
+            });
+        }
+    };
+
+
+// ============================================================
+// PERMANENTLY DELETE WORK
+// ============================================================
+//
+// Superadmin only. Work must already be archived.
+//
+
+export const deleteWork =
+    async (
+        req,
+        res
+    ) => {
+        try {
+            const {
+                workId,
+            } = req.params;
+
+            if (!isSuperAdmin(req.user)) {
+                return res.status(403).json({
+                    success: false,
+                    message:
+                        "Only Superadmin can permanently delete work.",
+                });
+            }
+
+            const work =
+                await Work.findById(
+                    workId
+                );
+
+            if (!work) {
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        "Work not found.",
+                });
+            }
+
+            if (
+                work.status !==
+                "ARCHIVED"
+            ) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        "Work must be archived before it can be permanently deleted.",
+                });
+            }
+
+            const tasks =
+                await WorkTask.find({
+                    work: work._id,
+                });
+
+            const taskIds =
+                tasks.map(
+                    (task) => task._id
+                );
+
+            if (taskIds.length) {
+                await WorkSubtask.deleteMany({
+                    task: {
+                        $in: taskIds,
+                    },
+                });
+            }
+
+            await WorkTask.deleteMany({
+                work: work._id,
+            });
+
+            await WorkComment.deleteMany({
+                work: work._id,
+            });
+
+            await WorkLink.deleteMany({
+                work: work._id,
+            });
+
+            await WorkActivity.deleteMany({
+                work: work._id,
+            });
+
+            await Work.findByIdAndDelete(
+                work._id
+            );
+
+            return res.json({
+                success: true,
+                message:
+                    "Work permanently deleted.",
+            });
+        } catch (error) {
+            console.error(
+                "Delete work error:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    "Failed to delete work.",
+            });
+        }
+    };
+
+
+// ============================================================
+// PERMANENTLY DELETE TASK
+// ============================================================
+
+export const deleteTask =
+    async (
+        req,
+        res
+    ) => {
+        try {
+            if (!isSuperAdmin(req.user)) {
+                return res.status(403).json({
+                    success: false,
+                    message:
+                        "Only Superadmin can permanently delete tasks.",
+                });
+            }
+
+            const task =
+                await WorkTask.findById(
+                    req.params.taskId
+                );
+
+            if (!task) {
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        "Task not found.",
+                });
+            }
+
+            if (
+                task.status !==
+                "ARCHIVED"
+            ) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        "Task must be archived before it can be permanently deleted.",
+                });
+            }
+
+            await WorkSubtask.deleteMany({
+                task: task._id,
+            });
+
+            await WorkTask.findByIdAndDelete(
+                task._id
+            );
+
+            return res.json({
+                success: true,
+                message:
+                    "Task permanently deleted.",
+            });
+        } catch (error) {
+            console.error(
+                "Delete task error:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    "Failed to delete task.",
+            });
+        }
+    };
+
+
+// ============================================================
+// PERMANENTLY DELETE SUBTASK
+// ============================================================
+
+export const deleteSubtask =
+    async (
+        req,
+        res
+    ) => {
+        try {
+            if (!isSuperAdmin(req.user)) {
+                return res.status(403).json({
+                    success: false,
+                    message:
+                        "Only Superadmin can permanently delete subtasks.",
+                });
+            }
+
+            const subtask =
+                await WorkSubtask.findById(
+                    req.params.subtaskId
+                );
+
+            if (!subtask) {
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        "Subtask not found.",
+                });
+            }
+
+            if (
+                subtask.status !==
+                "ARCHIVED"
+            ) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        "Subtask must be archived before it can be permanently deleted.",
+                });
+            }
+
+            await WorkSubtask.findByIdAndDelete(
+                subtask._id
+            );
+
+            return res.json({
+                success: true,
+                message:
+                    "Subtask permanently deleted.",
+            });
+        } catch (error) {
+            console.error(
+                "Delete subtask error:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    "Failed to delete subtask.",
             });
         }
     };

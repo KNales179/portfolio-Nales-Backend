@@ -11,6 +11,7 @@ import {
     restoreWork,
     lockWork,
     unlockWork,
+    deleteWork,
 
     getWorkParticipants,
     addParticipant,
@@ -24,6 +25,8 @@ import {
     archiveTask,
     restoreTask,
     reorderTasks,
+    getArchivedTasks,
+    deleteTask,
 
     createSubtask,
     updateSubtask,
@@ -32,6 +35,8 @@ import {
     archiveSubtask,
     restoreSubtask,
     reorderSubtasks,
+    getArchivedSubtasks,
+    deleteSubtask,
 
     reorderWorks,
 
@@ -160,6 +165,15 @@ router.post(
 );
 
 
+// DELETE /api/work/:workId
+//
+// Permanent deletion. Superadmin only, work must be archived.
+router.delete(
+    "/:workId",
+    deleteWork
+);
+
+
 // ============================================================
 // WORK PARTICIPANTS
 // ============================================================
@@ -275,6 +289,23 @@ router.post(
     restoreTask
 );
 
+
+// GET /api/work/:workId/tasks/archived
+router.get(
+    "/:workId/tasks/archived",
+    getArchivedTasks
+);
+
+
+// DELETE /api/work/tasks/:taskId
+//
+// Permanent deletion. Superadmin only, task must be archived.
+router.delete(
+    "/tasks/:taskId",
+    deleteTask
+);
+
+
 // PATCH /api/work/:workId/tasks/reorder
 //
 // Body:
@@ -338,6 +369,22 @@ router.post(
 router.post(
     "/subtasks/:subtaskId/restore",
     restoreSubtask
+);
+
+
+// GET /api/work/tasks/:taskId/subtasks/archived
+router.get(
+    "/tasks/:taskId/subtasks/archived",
+    getArchivedSubtasks
+);
+
+
+// DELETE /api/work/subtasks/:subtaskId
+//
+// Permanent deletion. Superadmin only, subtask must be archived.
+router.delete(
+    "/subtasks/:subtaskId",
+    deleteSubtask
 );
 
 
