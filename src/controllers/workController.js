@@ -243,43 +243,23 @@ const calculateWorkProgress = async (
         return 0;
     }
 
-    let completedTasks = 0;
+    // Each task still gets an equal 1/N share of the bar — but
+    // partial subtask completion within a task now counts toward
+    // that share immediately, instead of waiting for the task to
+    // be fully done.
+
+    let totalProgress = 0;
 
     for (const task of tasks) {
-        const subtasks =
-            await WorkSubtask.find({
-                task: task._id,
-                status: {
-                    $ne: "ARCHIVED",
-                },
-            });
-
-        if (subtasks.length === 0) {
-            if (
-                task.status ===
-                "COMPLETED"
-            ) {
-                completedTasks++;
-            }
-
-            continue;
-        }
-
-        const allCompleted =
-            subtasks.every(
-                (subtask) =>
-                    subtask.completed
+        totalProgress +=
+            await calculateTaskProgress(
+                task._id
             );
-
-        if (allCompleted) {
-            completedTasks++;
-        }
     }
 
     return Math.round(
-        (completedTasks /
-            tasks.length) *
-        100
+        totalProgress /
+        tasks.length
     );
 };
 
@@ -4762,7 +4742,7 @@ export const createWorkComment =
     };
 
 // ============================================================
-// UPDATE WORK COMMENT
+// UPDATE WORK COMMENT 
 // ============================================================
 
 export const updateWorkComment =
@@ -5613,9 +5593,9 @@ export const deleteWork =
                 work: work._id,
             });
 
-            await WorkActivity.deleteMany({
-                work: work._id,
-            });
+            // WorkActivity is intentionally left untouched — it's
+            // immutable by design, and the audit trail should survive
+            // even permanent deletion of the Work itself.
 
             await Work.findByIdAndDelete(
                 work._id
