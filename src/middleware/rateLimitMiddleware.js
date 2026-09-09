@@ -97,3 +97,28 @@ export const analyticsCollectRateLimiter = rateLimit({
         message: "Too many analytics requests.",
     },
 });
+
+// ============================================================
+// PUBLIC ANALYTICS RATE LIMITER
+// ============================================================
+//
+// The public insights endpoint is unauthenticated and its
+// response is cached server-side, so a generous per-IP cap is
+// enough to stop abuse.
+//
+// 30 requests per minute per IP.
+// ============================================================
+
+export const publicAnalyticsRateLimiter = rateLimit({
+    windowMs: 60 * 1000,
+
+    max: 30,
+
+    standardHeaders: true,
+    legacyHeaders: false,
+
+    message: {
+        success: false,
+        message: "Too many requests.",
+    },
+});

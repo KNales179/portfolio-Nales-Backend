@@ -202,6 +202,44 @@ const buildContiguousSeries = (
 };
 
 
+// Ordered list of ISO bucket-start keys for a period. Lets a
+// caller merge several metrics onto one gap-free time axis.
+const bucketKeys = (start, end, granularity) => {
+    const keys = [];
+
+    const cursor = new Date(start);
+    cursor.setUTCMilliseconds(0);
+    cursor.setUTCSeconds(0);
+    cursor.setUTCMinutes(0);
+
+    if (granularity !== "hour") {
+        cursor.setUTCHours(0);
+    }
+
+    if (granularity === "month") {
+        cursor.setUTCDate(1);
+    }
+
+    let guard = 0;
+
+    while (cursor <= end && guard < 1000) {
+        keys.push(cursor.toISOString());
+
+        if (granularity === "hour") {
+            cursor.setUTCHours(cursor.getUTCHours() + 1);
+        } else if (granularity === "month") {
+            cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+        } else {
+            cursor.setUTCDate(cursor.getUTCDate() + 1);
+        }
+
+        guard += 1;
+    }
+
+    return keys;
+};
+
+
 // ============================================================
 // COLLECT EVENTS  (public)
 // ============================================================
@@ -1125,6 +1163,1304 @@ export const getAudienceAnalytics = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: "Unable to load audience analytics.",
+        });
+    }
+};
+
+
+// ============================================================
+// VISITOR ANALYTICS  (admin)
+// ============================================================
+//
+// Per-visitor drill-down. A "visitor" is an anonymous
+// visitorHash (sha256 of ip + user agent). No IP or user agent
+// is ever returned here — only the hash label, coarse geo, and
+// device family.
+// ============================================================
+
+const VISITOR_LABEL = (hash) =>
+    "Visitor " + String(hash || "").slice(0, 8);
+
+const VISITOR_EVENT_CAP = 1000;
+
+
+// ------------------------------------------------------------
+// GET /api/analytics/visitors?period=&limit=&skip=
+// ------------------------------------------------------------
+
+export const getVisitors = async (req, res) => {
+    try {
+        const { period, start, end } = resolvePeriod(
+            req.query.period
+        );
+
+        const limit = Math.min(
+            Math.max(
+                parseInt(req.query.limit, 10) || 25,
+                1
+            ),
+            100
+        );
+
+        const skip = Math.max(
+            parseInt(req.query.skip, 10) || 0,
+            0
+        );
+
+        const [result] = await AnalyticsEvent.aggregate([
+            {
+                $match: {
+                    visitorHash: { $ne: null },
+                    createdAt: {
+                        $gte: start,
+                        $lte: end,
+                    },
+                },
+            },
+            // Sort ascending so $last picks the most recent
+            // geo / device values for each visitor.
+            { $sort: { createdAt: 1 } },
+            {
+                $group: {
+                    _id: "$visitorHash",
+                    pageViews: {
+                        $sum: {
+                            $cond: [
+                                {
+                                    $eq: [
+                                        "$type",
+                                        "PAGE_VIEW",
+                                    ],
+                                },
+                                1,
+                                0,
+                            ],
+                        },
+                    },
+                    interactions: {
+                        $sum: {
+                            $cond: [
+                                {
+                                    $eq: [
+                                        "$type",
+                                        "INTERACTION",
+                                    ],
+                                },
+                                1,
+                                0,
+                            ],
+                        },
+                    },
+                    sessions: { $addToSet: "$sessionId" },
+                    firstSeen: { $min: "$createdAt" },
+                    lastSeen: { $max: "$createdAt" },
+                    country: { $last: "$geo.country" },
+                    countryCode: {
+                        $last: "$geo.countryCode",
+                    },
+                    deviceType: { $last: "$device.type" },
+                    browser: { $last: "$device.browser" },
+                    os: { $last: "$device.os" },
+                },
+            },
+            {
+                $project: {
+                    _id: 0,
+                    visitorHash: "$_id",
+                    label: {
+                        $concat: [
+                            "Visitor ",
+                            {
+                                $substrCP: [
+                                    "$_id",
+                                    0,
+                                    8,
+                                ],
+                            },
+                        ],
+                    },
+                    pageViews: 1,
+                    interactions: 1,
+                    sessionCount: { $size: "$sessions" },
+                    returning: {
+                        $gt: [{ $size: "$sessions" }, 1],
+                    },
+                    firstSeen: 1,
+                    lastSeen: 1,
+                    country: 1,
+                    countryCode: 1,
+                    deviceType: {
+                        $ifNull: ["$deviceType", "unknown"],
+                    },
+                    browser: 1,
+                    os: 1,
+                },
+            },
+            { $sort: { lastSeen: -1 } },
+            {
+                $facet: {
+                    rows: [
+                        { $skip: skip },
+                        { $limit: limit },
+                    ],
+                    total: [{ $count: "value" }],
+                },
+            },
+        ]);
+
+        const rows = result?.rows || [];
+        const total = result?.total?.[0]?.value || 0;
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                period,
+                range: {
+                    start: start.toISOString(),
+                    end: end.toISOString(),
+                },
+                total,
+                limit,
+                skip,
+                visitors: rows,
+            },
+        });
+    } catch (error) {
+        console.error(
+            "Visitor list error:",
+            error.message
+        );
+
+        return res.status(500).json({
+            success: false,
+            message: "Unable to load visitors.",
+        });
+    }
+};
+
+
+// ------------------------------------------------------------
+// GET /api/analytics/visitors/:visitorHash?period=
+// ------------------------------------------------------------
+
+export const getVisitorDetail = async (req, res) => {
+    try {
+        const { visitorHash } = req.params;
+
+        if (
+            !isNonEmptyString(visitorHash) ||
+            !/^[a-f0-9]{16,64}$/i.test(visitorHash)
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid visitor reference.",
+            });
+        }
+
+        const { period, start, end } = resolvePeriod(
+            req.query.period
+        );
+
+        const events = await AnalyticsEvent.find(
+            {
+                visitorHash,
+                createdAt: { $gte: start, $lte: end },
+            },
+            {
+                type: 1,
+                path: 1,
+                action: 1,
+                target: 1,
+                durationMs: 1,
+                sessionId: 1,
+                referrer: 1,
+                createdAt: 1,
+                "geo.country": 1,
+                "geo.countryCode": 1,
+                "geo.city": 1,
+                "device.type": 1,
+                "device.browser": 1,
+                "device.os": 1,
+            }
+        )
+            .sort({ createdAt: 1 })
+            .limit(VISITOR_EVENT_CAP)
+            .lean();
+
+        if (events.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message:
+                    "No activity for this visitor in the selected period.",
+            });
+        }
+
+        // --------------------------------------------------
+        // SUMMARY
+        // --------------------------------------------------
+
+        const last = events[events.length - 1];
+
+        let pageViews = 0;
+        let interactions = 0;
+        let totalDurationMs = 0;
+
+        const sessionIds = new Set();
+        const pageCounts = new Map();
+        const actionCounts = new Map();
+
+        // sessionId -> aggregate
+        const sessionMap = new Map();
+
+        for (const event of events) {
+            sessionIds.add(event.sessionId);
+
+            if (!sessionMap.has(event.sessionId)) {
+                sessionMap.set(event.sessionId, {
+                    sessionId: event.sessionId,
+                    startedAt: event.createdAt,
+                    endedAt: event.createdAt,
+                    pageViews: 0,
+                    interactions: 0,
+                    entryPage: null,
+                    exitPage: null,
+                });
+            }
+
+            const session = sessionMap.get(
+                event.sessionId
+            );
+
+            session.endedAt = event.createdAt;
+
+            if (event.type === "PAGE_VIEW") {
+                pageViews += 1;
+                session.pageViews += 1;
+
+                pageCounts.set(
+                    event.path,
+                    (pageCounts.get(event.path) || 0) + 1
+                );
+
+                if (!session.entryPage) {
+                    session.entryPage = event.path;
+                }
+
+                session.exitPage = event.path;
+            } else if (event.type === "PAGE_EXIT") {
+                if (Number.isFinite(event.durationMs)) {
+                    totalDurationMs += event.durationMs;
+                }
+            } else if (event.type === "INTERACTION") {
+                interactions += 1;
+                session.interactions += 1;
+
+                if (event.action) {
+                    actionCounts.set(
+                        event.action,
+                        (actionCounts.get(event.action) ||
+                            0) + 1
+                    );
+                }
+            }
+        }
+
+        const sortedCounts = (map) =>
+            [...map.entries()]
+                .map(([key, count]) => ({ key, count }))
+                .sort((a, b) => b.count - a.count);
+
+        // --------------------------------------------------
+        // TIMELINE (page views + interactions only)
+        // --------------------------------------------------
+
+        const timeline = events
+            .filter(
+                (event) =>
+                    event.type === "PAGE_VIEW" ||
+                    event.type === "INTERACTION" ||
+                    (event.type === "PAGE_EXIT" &&
+                        Number.isFinite(event.durationMs))
+            )
+            .map((event) => ({
+                type: event.type,
+                path: event.path,
+                action: event.action || null,
+                target: event.target || null,
+                durationMs: Number.isFinite(
+                    event.durationMs
+                )
+                    ? event.durationMs
+                    : null,
+                sessionId: event.sessionId,
+                at: event.createdAt,
+            }));
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                period,
+                range: {
+                    start: start.toISOString(),
+                    end: end.toISOString(),
+                },
+                visitor: {
+                    visitorHash,
+                    label: VISITOR_LABEL(visitorHash),
+                    country: last.geo?.country || null,
+                    countryCode:
+                        last.geo?.countryCode || null,
+                    city: last.geo?.city || null,
+                    device: {
+                        type: last.device?.type || "unknown",
+                        browser:
+                            last.device?.browser || null,
+                        os: last.device?.os || null,
+                    },
+                    firstSeen: events[0].createdAt,
+                    lastSeen: last.createdAt,
+                    sessionCount: sessionIds.size,
+                    returning: sessionIds.size > 1,
+                    pageViews,
+                    interactions,
+                    totalDurationMs,
+                    truncated:
+                        events.length >= VISITOR_EVENT_CAP,
+                },
+                sessions: [...sessionMap.values()].sort(
+                    (a, b) =>
+                        new Date(b.startedAt) -
+                        new Date(a.startedAt)
+                ),
+                topPages: sortedCounts(pageCounts)
+                    .slice(0, 8)
+                    .map((row) => ({
+                        path: row.key,
+                        views: row.count,
+                    })),
+                topInteractions: sortedCounts(actionCounts)
+                    .slice(0, 8)
+                    .map((row) => ({
+                        action: row.key,
+                        count: row.count,
+                    })),
+                timeline,
+            },
+        });
+    } catch (error) {
+        console.error(
+            "Visitor detail error:",
+            error.message
+        );
+
+        return res.status(500).json({
+            success: false,
+            message: "Unable to load visitor detail.",
+        });
+    }
+};
+
+
+// ============================================================
+// VISITOR FLOW  (admin)
+// ============================================================
+//
+// GET /api/analytics/flow?period=today|7d|30d|year
+//
+// How visitors move through the portfolio: entry pages, exit
+// pages, page-to-page transitions, and the most common full
+// navigation paths. Computed from PAGE_VIEW order within each
+// session.
+// ============================================================
+
+const FLOW_SESSION_CAP = 5000;
+const FLOW_PATH_MAX_STEPS = 6;
+
+
+export const getVisitorFlow = async (req, res) => {
+    try {
+        const { period, start, end } = resolvePeriod(
+            req.query.period
+        );
+
+        const sessions = await AnalyticsEvent.aggregate([
+            {
+                $match: {
+                    type: "PAGE_VIEW",
+                    createdAt: {
+                        $gte: start,
+                        $lte: end,
+                    },
+                },
+            },
+            { $sort: { createdAt: 1 } },
+            {
+                $group: {
+                    _id: "$sessionId",
+                    pages: { $push: "$path" },
+                },
+            },
+            { $limit: FLOW_SESSION_CAP },
+        ]);
+
+        const entryCounts = new Map();
+        const exitCounts = new Map();
+        const transitionCounts = new Map();
+        const pathCounts = new Map();
+
+        let totalPages = 0;
+        let bouncedSessions = 0;
+
+        const bump = (map, key) => {
+            map.set(key, (map.get(key) || 0) + 1);
+        };
+
+        for (const session of sessions) {
+            // Collapse immediate repeats (a page re-rendering
+            // shouldn't read as A -> A).
+            const steps = [];
+
+            for (const path of session.pages) {
+                if (
+                    steps.length === 0 ||
+                    steps[steps.length - 1] !== path
+                ) {
+                    steps.push(path);
+                }
+            }
+
+            if (steps.length === 0) {
+                continue;
+            }
+
+            totalPages += steps.length;
+
+            bump(entryCounts, steps[0]);
+            bump(exitCounts, steps[steps.length - 1]);
+
+            if (steps.length === 1) {
+                bouncedSessions += 1;
+            }
+
+            for (let i = 0; i < steps.length - 1; i += 1) {
+                bump(
+                    transitionCounts,
+                    `${steps[i]} ${steps[i + 1]}`
+                );
+            }
+
+            const trimmedPath = steps
+                .slice(0, FLOW_PATH_MAX_STEPS)
+                .join(" ");
+
+            bump(pathCounts, trimmedPath);
+        }
+
+        const sessionCount = sessions.length;
+
+        const rank = (map, limit) =>
+            [...map.entries()]
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, limit);
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                period,
+                range: {
+                    start: start.toISOString(),
+                    end: end.toISOString(),
+                },
+                totals: {
+                    sessions: sessionCount,
+                    bouncedSessions,
+                    bounceRate:
+                        sessionCount > 0
+                            ? Math.round(
+                                  (bouncedSessions /
+                                      sessionCount) *
+                                      100
+                              )
+                            : 0,
+                    avgPagesPerSession:
+                        sessionCount > 0
+                            ? Math.round(
+                                  (totalPages /
+                                      sessionCount) *
+                                      10
+                              ) / 10
+                            : 0,
+                },
+                entryPages: rank(entryCounts, 8).map(
+                    ([path, count]) => ({ path, count })
+                ),
+                exitPages: rank(exitCounts, 8).map(
+                    ([path, count]) => ({ path, count })
+                ),
+                transitions: rank(transitionCounts, 12).map(
+                    ([key, count]) => {
+                        const [from, to] =
+                            key.split(" ");
+                        return { from, to, count };
+                    }
+                ),
+                paths: rank(pathCounts, 8)
+                    .filter(([key]) => key.includes(" "))
+                    .map(([key, count]) => ({
+                        steps: key.split(" "),
+                        count,
+                    })),
+            },
+        });
+    } catch (error) {
+        console.error(
+            "Visitor flow error:",
+            error.message
+        );
+
+        return res.status(500).json({
+            success: false,
+            message: "Unable to load visitor flow.",
+        });
+    }
+};
+
+
+// ============================================================
+// ENGAGEMENT ANALYTICS  (admin)
+// ============================================================
+//
+// GET /api/analytics/engagement?period=today|7d|30d|year
+//
+// Time spent + a composite engagement score per page, so a
+// page with many views but shallow attention can be told apart
+// from one with fewer views but deep engagement.
+// ============================================================
+
+// A session counts as "engaged" if the visitor did more than
+// glance: any interaction, or more than one page, or more than
+// this many seconds on the site.
+const ENGAGED_SESSION_MIN_MS = 15 * 1000;
+
+// Weights for the composite page engagement score. Tune freely.
+const ENGAGEMENT_WEIGHTS = {
+    time: 0.35,
+    interactionsPerView: 0.4,
+    scrollDepth: 0.25,
+};
+
+
+export const getEngagementAnalytics = async (req, res) => {
+    try {
+        const { period, start, end, granularity } =
+            resolvePeriod(req.query.period);
+
+        const match = {
+            createdAt: { $gte: start, $lte: end },
+        };
+
+        // ----------------------------------------------------
+        // PER-PAGE + SESSION AGGREGATION
+        // ----------------------------------------------------
+
+        const [agg] = await AnalyticsEvent.aggregate([
+            { $match: match },
+            {
+                $facet: {
+                    // views per path
+                    views: [
+                        { $match: { type: "PAGE_VIEW" } },
+                        {
+                            $group: {
+                                _id: "$path",
+                                views: { $sum: 1 },
+                            },
+                        },
+                    ],
+
+                    // time per path (from PAGE_EXIT durations)
+                    time: [
+                        {
+                            $match: {
+                                type: "PAGE_EXIT",
+                                durationMs: { $ne: null },
+                            },
+                        },
+                        {
+                            $group: {
+                                _id: "$path",
+                                totalMs: {
+                                    $sum: "$durationMs",
+                                },
+                                avgMs: {
+                                    $avg: "$durationMs",
+                                },
+                            },
+                        },
+                    ],
+
+                    // interactions per path
+                    interactions: [
+                        {
+                            $match: {
+                                type: "INTERACTION",
+                            },
+                        },
+                        {
+                            $group: {
+                                _id: "$path",
+                                count: { $sum: 1 },
+                            },
+                        },
+                    ],
+
+                    // scroll depth: per (path, session) take the
+                    // furthest bucket reached, then average per path
+                    scroll: [
+                        {
+                            $match: {
+                                type: "INTERACTION",
+                                action: "SCROLL_DEPTH",
+                            },
+                        },
+                        {
+                            $group: {
+                                _id: {
+                                    path: "$path",
+                                    session: "$sessionId",
+                                },
+                                maxDepth: {
+                                    $max: {
+                                        $convert: {
+                                            input: "$target",
+                                            to: "int",
+                                            onError: 0,
+                                            onNull: 0,
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                        {
+                            $group: {
+                                _id: "$_id.path",
+                                avgDepth: {
+                                    $avg: "$maxDepth",
+                                },
+                            },
+                        },
+                    ],
+
+                    // per-session totals for engagement rate
+                    // and average session duration
+                    sessions: [
+                        {
+                            $group: {
+                                _id: "$sessionId",
+                                visitorHash: {
+                                    $first: "$visitorHash",
+                                },
+                                pageViews: {
+                                    $sum: {
+                                        $cond: [
+                                            {
+                                                $eq: [
+                                                    "$type",
+                                                    "PAGE_VIEW",
+                                                ],
+                                            },
+                                            1,
+                                            0,
+                                        ],
+                                    },
+                                },
+                                interactions: {
+                                    $sum: {
+                                        $cond: [
+                                            {
+                                                $eq: [
+                                                    "$type",
+                                                    "INTERACTION",
+                                                ],
+                                            },
+                                            1,
+                                            0,
+                                        ],
+                                    },
+                                },
+                                durationMs: {
+                                    $sum: {
+                                        $ifNull: [
+                                            "$durationMs",
+                                            0,
+                                        ],
+                                    },
+                                },
+                            },
+                        },
+                    ],
+                },
+            },
+        ]);
+
+        // ----------------------------------------------------
+        // MERGE PER-PAGE
+        // ----------------------------------------------------
+
+        const byPath = new Map();
+
+        const ensure = (path) => {
+            if (!byPath.has(path)) {
+                byPath.set(path, {
+                    path,
+                    views: 0,
+                    totalTimeMs: 0,
+                    avgTimeMs: 0,
+                    interactions: 0,
+                    avgScrollDepth: 0,
+                });
+            }
+            return byPath.get(path);
+        };
+
+        for (const row of agg.views || []) {
+            ensure(row._id).views = row.views;
+        }
+        for (const row of agg.time || []) {
+            const page = ensure(row._id);
+            page.totalTimeMs = Math.round(row.totalMs);
+            page.avgTimeMs = Math.round(row.avgMs);
+        }
+        for (const row of agg.interactions || []) {
+            ensure(row._id).interactions = row.count;
+        }
+        for (const row of agg.scroll || []) {
+            ensure(row._id).avgScrollDepth = Math.round(
+                row.avgDepth
+            );
+        }
+
+        let pages = [...byPath.values()].filter(
+            (page) => page.views > 0
+        );
+
+        // ----------------------------------------------------
+        // ENGAGEMENT SCORE (min-max normalized across pages)
+        // ----------------------------------------------------
+
+        const withRatios = pages.map((page) => ({
+            ...page,
+            interactionsPerView:
+                page.views > 0
+                    ? page.interactions / page.views
+                    : 0,
+        }));
+
+        const maxOf = (key) =>
+            withRatios.reduce(
+                (max, page) => Math.max(max, page[key]),
+                0
+            );
+
+        const maxTime = maxOf("avgTimeMs");
+        const maxIpv = maxOf("interactionsPerView");
+        const maxScroll = maxOf("avgScrollDepth");
+
+        pages = withRatios
+            .map((page) => {
+                const timeN = maxTime
+                    ? page.avgTimeMs / maxTime
+                    : 0;
+                const ipvN = maxIpv
+                    ? page.interactionsPerView / maxIpv
+                    : 0;
+                const scrollN = maxScroll
+                    ? page.avgScrollDepth / maxScroll
+                    : 0;
+
+                const score = Math.round(
+                    (timeN * ENGAGEMENT_WEIGHTS.time +
+                        ipvN *
+                            ENGAGEMENT_WEIGHTS.interactionsPerView +
+                        scrollN *
+                            ENGAGEMENT_WEIGHTS.scrollDepth) *
+                        100
+                );
+
+                return {
+                    path: page.path,
+                    views: page.views,
+                    avgTimeMs: page.avgTimeMs,
+                    totalTimeMs: page.totalTimeMs,
+                    interactions: page.interactions,
+                    interactionsPerView:
+                        Math.round(
+                            page.interactionsPerView * 100
+                        ) / 100,
+                    avgScrollDepth: page.avgScrollDepth,
+                    engagementScore: score,
+                };
+            })
+            .sort(
+                (a, b) =>
+                    b.engagementScore - a.engagementScore
+            );
+
+        // ----------------------------------------------------
+        // SESSION TOTALS
+        // ----------------------------------------------------
+
+        const sessionRows = agg.sessions || [];
+        const sessionCount = sessionRows.length;
+
+        let engagedSessions = 0;
+        let totalSessionMs = 0;
+        const visitorSessionCounts = new Map();
+
+        for (const session of sessionRows) {
+            totalSessionMs += session.durationMs || 0;
+
+            if (
+                session.interactions > 0 ||
+                session.pageViews > 1 ||
+                session.durationMs >= ENGAGED_SESSION_MIN_MS
+            ) {
+                engagedSessions += 1;
+            }
+
+            if (session.visitorHash) {
+                visitorSessionCounts.set(
+                    session.visitorHash,
+                    (visitorSessionCounts.get(
+                        session.visitorHash
+                    ) || 0) + 1
+                );
+            }
+        }
+
+        let repeatVisitors = 0;
+        for (const count of visitorSessionCounts.values()) {
+            if (count > 1) {
+                repeatVisitors += 1;
+            }
+        }
+
+        // ----------------------------------------------------
+        // ACTIVITY SERIES (sessions / views / interactions)
+        // ----------------------------------------------------
+
+        const [seriesAgg] = await AnalyticsEvent.aggregate([
+            { $match: match },
+            {
+                $facet: {
+                    views: [
+                        { $match: { type: "PAGE_VIEW" } },
+                        {
+                            $group: {
+                                _id: {
+                                    $dateTrunc: {
+                                        date: "$createdAt",
+                                        unit: granularity,
+                                    },
+                                },
+                                n: { $sum: 1 },
+                            },
+                        },
+                    ],
+                    interactions: [
+                        {
+                            $match: {
+                                type: "INTERACTION",
+                            },
+                        },
+                        {
+                            $group: {
+                                _id: {
+                                    $dateTrunc: {
+                                        date: "$createdAt",
+                                        unit: granularity,
+                                    },
+                                },
+                                n: { $sum: 1 },
+                            },
+                        },
+                    ],
+                    sessions: [
+                        {
+                            $group: {
+                                _id: {
+                                    bucket: {
+                                        $dateTrunc: {
+                                            date: "$createdAt",
+                                            unit: granularity,
+                                        },
+                                    },
+                                    session: "$sessionId",
+                                },
+                            },
+                        },
+                        {
+                            $group: {
+                                _id: "$_id.bucket",
+                                n: { $sum: 1 },
+                            },
+                        },
+                    ],
+                },
+            },
+        ]);
+
+        const toMap = (rows) => {
+            const map = new Map();
+            for (const row of rows || []) {
+                map.set(
+                    new Date(row._id).toISOString(),
+                    row.n
+                );
+            }
+            return map;
+        };
+
+        const viewsMap = toMap(seriesAgg.views);
+        const interactionsMap = toMap(
+            seriesAgg.interactions
+        );
+        const sessionsMap = toMap(seriesAgg.sessions);
+
+        const activity = bucketKeys(
+            start,
+            end,
+            granularity
+        ).map((key) => ({
+            date: key,
+            pageViews: viewsMap.get(key) || 0,
+            interactions: interactionsMap.get(key) || 0,
+            sessions: sessionsMap.get(key) || 0,
+        }));
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                period,
+                granularity,
+                range: {
+                    start: start.toISOString(),
+                    end: end.toISOString(),
+                },
+                totals: {
+                    sessions: sessionCount,
+                    engagedSessions,
+                    engagementRate:
+                        sessionCount > 0
+                            ? Math.round(
+                                  (engagedSessions /
+                                      sessionCount) *
+                                      100
+                              )
+                            : 0,
+                    avgSessionDurationMs:
+                        sessionCount > 0
+                            ? Math.round(
+                                  totalSessionMs /
+                                      sessionCount
+                              )
+                            : 0,
+                    totalTimeMs: totalSessionMs,
+                    repeatVisitors,
+                },
+                pages,
+                activity,
+                weights: ENGAGEMENT_WEIGHTS,
+            },
+        });
+    } catch (error) {
+        console.error(
+            "Engagement analytics error:",
+            error.message
+        );
+
+        return res.status(500).json({
+            success: false,
+            message: "Unable to load engagement analytics.",
+        });
+    }
+};
+
+
+// ============================================================
+// PUBLIC ANALYTICS  (unauthenticated)
+// ============================================================
+//
+// GET /api/analytics/public
+//
+// A sanitized, aggregated snapshot safe to show portfolio
+// visitors. Fixed 30-day window. Never exposes visitor hashes,
+// IPs, individual sessions, geo, or raw events — only counts,
+// durations, and public route paths.
+//
+// The result is cached in memory so a burst of visitors does
+// not translate into a burst of aggregations.
+// ============================================================
+
+const PUBLIC_ANALYTICS_TTL_MS = 5 * 60 * 1000;
+const PUBLIC_ANALYTICS_WINDOW_DAYS = 30;
+
+let publicAnalyticsCache = {
+    data: null,
+    expiresAt: 0,
+};
+
+
+const computePublicAnalytics = async () => {
+    const end = new Date();
+    const start = new Date(end);
+    start.setUTCDate(
+        start.getUTCDate() - PUBLIC_ANALYTICS_WINDOW_DAYS
+    );
+    start.setUTCHours(0, 0, 0, 0);
+
+    const match = {
+        createdAt: { $gte: start, $lte: end },
+    };
+
+    const [agg] = await AnalyticsEvent.aggregate([
+        { $match: match },
+        {
+            $facet: {
+                pageViews: [
+                    { $match: { type: "PAGE_VIEW" } },
+                    { $count: "value" },
+                ],
+                visitors: [
+                    {
+                        $match: {
+                            visitorHash: { $ne: null },
+                        },
+                    },
+                    {
+                        $group: {
+                            _id: null,
+                            v: {
+                                $addToSet: "$visitorHash",
+                            },
+                        },
+                    },
+                    {
+                        $project: {
+                            value: { $size: "$v" },
+                        },
+                    },
+                ],
+                interactions: [
+                    { $match: { type: "INTERACTION" } },
+                    { $count: "value" },
+                ],
+                mostViewedPage: [
+                    { $match: { type: "PAGE_VIEW" } },
+                    {
+                        $group: {
+                            _id: "$path",
+                            n: { $sum: 1 },
+                        },
+                    },
+                    { $sort: { n: -1 } },
+                    { $limit: 1 },
+                ],
+                mostInteractedPage: [
+                    { $match: { type: "INTERACTION" } },
+                    {
+                        $group: {
+                            _id: "$path",
+                            n: { $sum: 1 },
+                        },
+                    },
+                    { $sort: { n: -1 } },
+                    { $limit: 1 },
+                ],
+                actionCounts: [
+                    { $match: { type: "INTERACTION" } },
+                    {
+                        $group: {
+                            _id: "$action",
+                            n: { $sum: 1 },
+                        },
+                    },
+                ],
+                sessions: [
+                    {
+                        $group: {
+                            _id: "$sessionId",
+                            pageViews: {
+                                $sum: {
+                                    $cond: [
+                                        {
+                                            $eq: [
+                                                "$type",
+                                                "PAGE_VIEW",
+                                            ],
+                                        },
+                                        1,
+                                        0,
+                                    ],
+                                },
+                            },
+                            interactions: {
+                                $sum: {
+                                    $cond: [
+                                        {
+                                            $eq: [
+                                                "$type",
+                                                "INTERACTION",
+                                            ],
+                                        },
+                                        1,
+                                        0,
+                                    ],
+                                },
+                            },
+                            durationMs: {
+                                $sum: {
+                                    $ifNull: [
+                                        "$durationMs",
+                                        0,
+                                    ],
+                                },
+                            },
+                        },
+                    },
+                ],
+                trend: [
+                    { $match: { type: "PAGE_VIEW" } },
+                    {
+                        $group: {
+                            _id: {
+                                bucket: {
+                                    $dateTrunc: {
+                                        date: "$createdAt",
+                                        unit: "day",
+                                    },
+                                },
+                                visitor: "$visitorHash",
+                            },
+                        },
+                    },
+                    {
+                        $group: {
+                            _id: "$_id.bucket",
+                            visitors: { $sum: 1 },
+                        },
+                    },
+                ],
+            },
+        },
+    ]);
+
+    const actionCount = (name) =>
+        (agg.actionCounts || []).find(
+            (row) => row._id === name
+        )?.n || 0;
+
+    const sessionRows = agg.sessions || [];
+    const sessionCount = sessionRows.length;
+
+    let engaged = 0;
+    let totalSessionMs = 0;
+
+    for (const session of sessionRows) {
+        totalSessionMs += session.durationMs || 0;
+
+        if (
+            session.interactions > 0 ||
+            session.pageViews > 1 ||
+            session.durationMs >= 15 * 1000
+        ) {
+            engaged += 1;
+        }
+    }
+
+    const trendMap = new Map(
+        (agg.trend || []).map((row) => [
+            new Date(row._id).toISOString(),
+            row.visitors,
+        ])
+    );
+
+    const trend = bucketKeys(start, end, "day").map(
+        (key) => ({
+            date: key,
+            visitors: trendMap.get(key) || 0,
+        })
+    );
+
+    return {
+        windowDays: PUBLIC_ANALYTICS_WINDOW_DAYS,
+        updatedAt: new Date().toISOString(),
+        totals: {
+            visitors: agg.visitors?.[0]?.value || 0,
+            pageViews: agg.pageViews?.[0]?.value || 0,
+            sessions: sessionCount,
+            interactions:
+                agg.interactions?.[0]?.value || 0,
+            avgSessionDurationMs:
+                sessionCount > 0
+                    ? Math.round(
+                          totalSessionMs / sessionCount
+                      )
+                    : 0,
+            engagementRate:
+                sessionCount > 0
+                    ? Math.round(
+                          (engaged / sessionCount) * 100
+                      )
+                    : 0,
+        },
+        mostViewedPage:
+            agg.mostViewedPage?.[0]?._id || null,
+        mostInteractedPage:
+            agg.mostInteractedPage?.[0]?._id || null,
+        activity: {
+            projectsOpened: actionCount("PROJECT_OPENED"),
+            resumeDownloads: actionCount("RESUME_DOWNLOAD"),
+            externalLinkClicks:
+                actionCount("EXTERNAL_LINK_CLICK") +
+                actionCount("GITHUB_CLICK") +
+                actionCount("EMAIL_CLICK"),
+            contactFormSubmissions: actionCount(
+                "CONTACT_FORM_SUBMITTED"
+            ),
+        },
+        trend,
+    };
+};
+
+
+export const getPublicAnalytics = async (req, res) => {
+    try {
+        const now = Date.now();
+
+        if (
+            !publicAnalyticsCache.data ||
+            publicAnalyticsCache.expiresAt <= now
+        ) {
+            publicAnalyticsCache = {
+                data: await computePublicAnalytics(),
+                expiresAt: now + PUBLIC_ANALYTICS_TTL_MS,
+            };
+        }
+
+        return res.status(200).json({
+            success: true,
+            data: publicAnalyticsCache.data,
+        });
+    } catch (error) {
+        console.error(
+            "Public analytics error:",
+            error.message
+        );
+
+        return res.status(500).json({
+            success: false,
+            message: "Unable to load analytics.",
         });
     }
 };

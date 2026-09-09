@@ -5,10 +5,18 @@ import {
     getPageAnalytics,
     getInteractionAnalytics,
     getAudienceAnalytics,
+    getVisitors,
+    getVisitorDetail,
+    getVisitorFlow,
+    getEngagementAnalytics,
+    getPublicAnalytics,
 } from "../controllers/analyticsController.js";
 
 import { protect } from "../middleware/authMiddleware.js";
-import { analyticsCollectRateLimiter } from "../middleware/rateLimitMiddleware.js";
+import {
+    analyticsCollectRateLimiter,
+    publicAnalyticsRateLimiter,
+} from "../middleware/rateLimitMiddleware.js";
 
 const router = express.Router();
 
@@ -21,6 +29,12 @@ router.post(
     "/collect",
     analyticsCollectRateLimiter,
     collectEvents
+);
+
+router.get(
+    "/public",
+    publicAnalyticsRateLimiter,
+    getPublicAnalytics
 );
 
 
@@ -44,6 +58,30 @@ router.get(
     "/audience",
     protect,
     getAudienceAnalytics
+);
+
+router.get(
+    "/visitors",
+    protect,
+    getVisitors
+);
+
+router.get(
+    "/visitors/:visitorHash",
+    protect,
+    getVisitorDetail
+);
+
+router.get(
+    "/flow",
+    protect,
+    getVisitorFlow
+);
+
+router.get(
+    "/engagement",
+    protect,
+    getEngagementAnalytics
 );
 
 
