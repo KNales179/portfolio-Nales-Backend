@@ -1645,15 +1645,16 @@ export const getVisitorFlow = async (req, res) => {
             for (let i = 0; i < steps.length - 1; i += 1) {
                 bump(
                     transitionCounts,
-                    `${steps[i]} ${steps[i + 1]}`
+                    JSON.stringify([steps[i], steps[i + 1]])
                 );
             }
 
-            const trimmedPath = steps
-                .slice(0, FLOW_PATH_MAX_STEPS)
-                .join(" ");
-
-            bump(pathCounts, trimmedPath);
+            bump(
+                pathCounts,
+                JSON.stringify(
+                    steps.slice(0, FLOW_PATH_MAX_STEPS)
+                )
+            );
         }
 
         const sessionCount = sessions.length;
@@ -1699,17 +1700,16 @@ export const getVisitorFlow = async (req, res) => {
                 ),
                 transitions: rank(transitionCounts, 12).map(
                     ([key, count]) => {
-                        const [from, to] =
-                            key.split(" ");
+                        const [from, to] = JSON.parse(key);
                         return { from, to, count };
                     }
                 ),
                 paths: rank(pathCounts, 8)
-                    .filter(([key]) => key.includes(" "))
                     .map(([key, count]) => ({
-                        steps: key.split(" "),
+                        steps: JSON.parse(key),
                         count,
-                    })),
+                    }))
+                    .filter((row) => row.steps.length > 1),
             },
         });
     } catch (error) {
@@ -2329,28 +2329,6 @@ const computePublicAnalytics = async () => {
                         },
                     },
                 ],
-                trend: [
-                    { $match: { type: "PAGE_VIEW" } },
-                    {
-                        $group: {
-                            _id: {
-                                bucket: {
-                                    $dateTrunc: {
-                                        date: "$createdAt",
-                                        unit: "day",
-                                    },
-                                },
-                                visitor: "$visitorHash",
-                            },
-                        },
-                    },
-                    {
-                        $group: {
-                            _id: "$_id.bucket",
-                            visitors: { $sum: 1 },
-                        },
-                    },
-                ],
             },
         },
     ]);
@@ -2377,20 +2355,6 @@ const computePublicAnalytics = async () => {
             engaged += 1;
         }
     }
-
-    const trendMap = new Map(
-        (agg.trend || []).map((row) => [
-            new Date(row._id).toISOString(),
-            row.visitors,
-        ])
-    );
-
-    const trend = bucketKeys(start, end, "day").map(
-        (key) => ({
-            date: key,
-            visitors: trendMap.get(key) || 0,
-        })
-    );
 
     return {
         windowDays: PUBLIC_ANALYTICS_WINDOW_DAYS,
@@ -2429,7 +2393,6 @@ const computePublicAnalytics = async () => {
                 "CONTACT_FORM_SUBMITTED"
             ),
         },
-        trend,
     };
 };
 
