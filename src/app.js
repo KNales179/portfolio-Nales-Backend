@@ -9,6 +9,7 @@ import uploadRoutes from "./routes/uploadRoutes.js";
 import workRoutes from "./routes/workRoutes.js";
 import contactRoutes from "./routes/contactRoutes.js";
 import analyticsRoutes from "./routes/analyticsRoutes.js";
+import projectRoutes from "./routes/projectRoutes.js";
 
 const app = express();
 
@@ -113,6 +114,7 @@ app.use("/api/upload", uploadRoutes);
 app.use("/api/work", workRoutes);
 app.use("/api/contact", contactRoutes);
 app.use("/api/analytics", analyticsRoutes);
+app.use("/api/projects", projectRoutes);
 
 // ============================================================
 // GLOBAL ERROR HANDLER
