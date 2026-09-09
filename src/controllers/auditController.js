@@ -70,7 +70,10 @@ export const getAuditLogs = async (req, res) => {
 
         const scopeFilter = {};
 
-        if (req.query.scope !== "all") {
+        // Only a super admin may see beyond content changes.
+        const canSeeAll = req.user?.role === "SUPER_ADMIN";
+
+        if (req.query.scope !== "all" || !canSeeAll) {
             scopeFilter.resource = { $in: CONTENT_RESOURCES };
         }
 

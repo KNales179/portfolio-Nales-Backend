@@ -67,10 +67,13 @@ router.patch(
 |--------------------------------------------------------------------------
 */
 
+// Both roles may review the content history; only a super admin
+// can widen the scope to auth / admin / work events (enforced in
+// the controller).
 router.get(
     "/audit-logs",
     protect,
-    authorize("SUPER_ADMIN"),
+    authorize("ADMIN", "SUPER_ADMIN"),
     getAuditLogs
 );
 
