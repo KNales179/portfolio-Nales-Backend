@@ -235,6 +235,20 @@ const analyticsEventSchema = new mongoose.Schema(
             immutable: true,
         },
 
+        // Visitor viewport size at the time of the event
+        // (client-reported). Used for the screen-size breakdown.
+        screen: {
+            type: new mongoose.Schema(
+                {
+                    w: { type: Number, default: null },
+                    h: { type: Number, default: null },
+                },
+                { _id: false }
+            ),
+            default: () => ({}),
+            immutable: true,
+        },
+
         geo: {
             type: geoSchema,
             default: () => ({}),

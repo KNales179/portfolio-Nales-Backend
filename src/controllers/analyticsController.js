@@ -83,6 +83,33 @@ const normalizeDuration = (value) => {
 };
 
 
+const normalizeDimension = (value) => {
+    const number = Number(value);
+
+    if (
+        !Number.isFinite(number) ||
+        number <= 0 ||
+        number > 20000
+    ) {
+        return null;
+    }
+
+    return Math.round(number);
+};
+
+
+const normalizeScreen = (screen) => {
+    if (!screen || typeof screen !== "object") {
+        return {};
+    }
+
+    return {
+        w: normalizeDimension(screen.w),
+        h: normalizeDimension(screen.h),
+    };
+};
+
+
 // period -> { start, end, granularity }
 const resolvePeriod = (rawPeriod) => {
     const period = VALID_PERIODS.includes(rawPeriod)
@@ -274,6 +301,8 @@ export const collectEvents = async (req, res) => {
                     : null;
             }
 
+            const screen = normalizeScreen(event.screen);
+
             documents.push({
                 type: event.type,
                 sessionId: event.sessionId.trim(),
@@ -284,6 +313,7 @@ export const collectEvents = async (req, res) => {
                 action,
                 target,
                 device,
+                screen,
                 geo,
                 ipAddress: ip || null,
                 userAgent: userAgent
@@ -763,6 +793,338 @@ export const getInteractionAnalytics = async (req, res) => {
             success: false,
             message:
                 "Unable to load interaction analytics.",
+        });
+    }
+};
+
+
+// ============================================================
+// AUDIENCE ANALYTICS  (admin)
+// ============================================================
+//
+// GET /api/analytics/audience?period=today|7d|30d|year
+//
+// Device / browser / OS / screen-size / location breakdowns.
+// Everything here is derived from context already attached to
+// each event at ingestion — no extra tracking is involved.
+// ============================================================
+
+// Viewport-width buckets. Boundaries must be ascending and the
+// last one is an open upper bound.
+const SCREEN_BUCKETS = [
+    { max: 640, label: "Small (< 640)" },
+    { max: 1024, label: "Medium (640–1024)" },
+    { max: 1440, label: "Large (1024–1440)" },
+    { max: Infinity, label: "X-Large (≥ 1440)" },
+];
+
+const screenBucketLabel = (width) => {
+    for (const bucket of SCREEN_BUCKETS) {
+        if (width < bucket.max) {
+            return bucket.label;
+        }
+    }
+
+    return SCREEN_BUCKETS[SCREEN_BUCKETS.length - 1].label;
+};
+
+
+export const getAudienceAnalytics = async (req, res) => {
+    try {
+        const { period, start, end } = resolvePeriod(
+            req.query.period
+        );
+
+        // One row per page view keeps every breakdown on the
+        // same denominator.
+        const [result] = await AnalyticsEvent.aggregate([
+            {
+                $match: {
+                    type: "PAGE_VIEW",
+                    createdAt: {
+                        $gte: start,
+                        $lte: end,
+                    },
+                },
+            },
+            {
+                $facet: {
+                    totalViews: [{ $count: "value" }],
+
+                    visitors: [
+                        {
+                            $group: {
+                                _id: null,
+                                v: {
+                                    $addToSet: "$visitorHash",
+                                },
+                            },
+                        },
+                        {
+                            $project: {
+                                value: {
+                                    $size: {
+                                        $setDifference: [
+                                            "$v",
+                                            [null],
+                                        ],
+                                    },
+                                },
+                            },
+                        },
+                    ],
+
+                    devices: [
+                        {
+                            $group: {
+                                _id: "$device.type",
+                                views: { $sum: 1 },
+                                visitors: {
+                                    $addToSet: "$visitorHash",
+                                },
+                            },
+                        },
+                        {
+                            $project: {
+                                _id: 0,
+                                type: {
+                                    $ifNull: [
+                                        "$_id",
+                                        "unknown",
+                                    ],
+                                },
+                                views: 1,
+                                visitors: {
+                                    $size: {
+                                        $setDifference: [
+                                            "$visitors",
+                                            [null],
+                                        ],
+                                    },
+                                },
+                            },
+                        },
+                        { $sort: { views: -1 } },
+                    ],
+
+                    browsers: [
+                        {
+                            $match: {
+                                "device.browser": {
+                                    $ne: null,
+                                },
+                            },
+                        },
+                        {
+                            $group: {
+                                _id: "$device.browser",
+                                views: { $sum: 1 },
+                            },
+                        },
+                        { $sort: { views: -1 } },
+                        { $limit: 8 },
+                    ],
+
+                    os: [
+                        {
+                            $match: {
+                                "device.os": { $ne: null },
+                            },
+                        },
+                        {
+                            $group: {
+                                _id: "$device.os",
+                                views: { $sum: 1 },
+                            },
+                        },
+                        { $sort: { views: -1 } },
+                        { $limit: 8 },
+                    ],
+
+                    screens: [
+                        {
+                            $match: {
+                                "screen.w": { $ne: null },
+                            },
+                        },
+                        {
+                            $group: {
+                                _id: "$screen.w",
+                                views: { $sum: 1 },
+                            },
+                        },
+                    ],
+
+                    countries: [
+                        {
+                            $match: {
+                                "geo.country": { $ne: null },
+                            },
+                        },
+                        {
+                            $group: {
+                                _id: {
+                                    country: "$geo.country",
+                                    code: "$geo.countryCode",
+                                },
+                                views: { $sum: 1 },
+                                visitors: {
+                                    $addToSet: "$visitorHash",
+                                },
+                            },
+                        },
+                        {
+                            $project: {
+                                _id: 0,
+                                country: "$_id.country",
+                                countryCode: "$_id.code",
+                                views: 1,
+                                visitors: {
+                                    $size: {
+                                        $setDifference: [
+                                            "$visitors",
+                                            [null],
+                                        ],
+                                    },
+                                },
+                            },
+                        },
+                        { $sort: { views: -1 } },
+                        { $limit: 12 },
+                    ],
+
+                    cities: [
+                        {
+                            $match: {
+                                "geo.city": { $ne: null },
+                            },
+                        },
+                        {
+                            $group: {
+                                _id: {
+                                    city: "$geo.city",
+                                    country: "$geo.country",
+                                },
+                                views: { $sum: 1 },
+                            },
+                        },
+                        {
+                            $project: {
+                                _id: 0,
+                                city: "$_id.city",
+                                country: "$_id.country",
+                                views: 1,
+                            },
+                        },
+                        { $sort: { views: -1 } },
+                        { $limit: 10 },
+                    ],
+
+                    geoCoverage: [
+                        {
+                            $group: {
+                                _id: null,
+                                total: { $sum: 1 },
+                                withGeo: {
+                                    $sum: {
+                                        $cond: [
+                                            {
+                                                $ne: [
+                                                    "$geo.country",
+                                                    null,
+                                                ],
+                                            },
+                                            1,
+                                            0,
+                                        ],
+                                    },
+                                },
+                            },
+                        },
+                    ],
+                },
+            },
+        ]);
+
+        // ----------------------------------------------------
+        // SCREEN BUCKETS
+        // ----------------------------------------------------
+
+        const screenTotals = new Map();
+
+        for (const row of result.screens || []) {
+            const label = screenBucketLabel(row._id);
+
+            screenTotals.set(
+                label,
+                (screenTotals.get(label) || 0) + row.views
+            );
+        }
+
+        const screens = SCREEN_BUCKETS.map(
+            (bucket) => ({
+                label: bucket.label,
+                views: screenTotals.get(bucket.label) || 0,
+            })
+        ).filter((row) => row.views > 0);
+
+        // ----------------------------------------------------
+        // GEO COVERAGE
+        // ----------------------------------------------------
+
+        const coverage = result.geoCoverage?.[0] || {
+            total: 0,
+            withGeo: 0,
+        };
+
+        const geoCoveragePct =
+            coverage.total > 0
+                ? Math.round(
+                      (coverage.withGeo / coverage.total) *
+                          100
+                  )
+                : 0;
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                period,
+                range: {
+                    start: start.toISOString(),
+                    end: end.toISOString(),
+                },
+                totals: {
+                    views:
+                        result.totalViews?.[0]?.value || 0,
+                    visitors:
+                        result.visitors?.[0]?.value || 0,
+                    geoCoveragePct,
+                },
+                devices: result.devices || [],
+                browsers: (result.browsers || []).map(
+                    (row) => ({
+                        name: row._id,
+                        views: row.views,
+                    })
+                ),
+                os: (result.os || []).map((row) => ({
+                    name: row._id,
+                    views: row.views,
+                })),
+                screens,
+                countries: result.countries || [],
+                cities: result.cities || [],
+            },
+        });
+    } catch (error) {
+        console.error(
+            "Audience analytics error:",
+            error.message
+        );
+
+        return res.status(500).json({
+            success: false,
+            message: "Unable to load audience analytics.",
         });
     }
 };

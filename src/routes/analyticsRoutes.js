@@ -4,6 +4,7 @@ import {
     collectEvents,
     getPageAnalytics,
     getInteractionAnalytics,
+    getAudienceAnalytics,
 } from "../controllers/analyticsController.js";
 
 import { protect } from "../middleware/authMiddleware.js";
@@ -37,6 +38,12 @@ router.get(
     "/interactions",
     protect,
     getInteractionAnalytics
+);
+
+router.get(
+    "/audience",
+    protect,
+    getAudienceAnalytics
 );
 
 
