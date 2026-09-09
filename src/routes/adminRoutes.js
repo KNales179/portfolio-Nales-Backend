@@ -15,6 +15,8 @@ import {
     resetPasswordWithTwoFactor,
 } from "../controllers/adminController.js";
 
+import { getAuditLogs } from "../controllers/auditController.js";
+
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
 import {
@@ -57,6 +59,19 @@ router.patch(
     "/profile/complete-first-login",
     protect,
     completeFirstLogin
+);
+
+/*
+|--------------------------------------------------------------------------
+| SUPER ADMIN - AUDIT LOG
+|--------------------------------------------------------------------------
+*/
+
+router.get(
+    "/audit-logs",
+    protect,
+    authorize("SUPER_ADMIN"),
+    getAuditLogs
 );
 
 /*

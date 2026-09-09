@@ -95,7 +95,13 @@ export const collections = {
 // ============================================================
 
 const SITE_TEXT_KEYS = {
-    hero: ["greeting", "name", "role", "description"],
+    hero: [
+        "greeting",
+        "name",
+        "role",
+        "description",
+        "photoUrl",
+    ],
     about: ["label", "title", "description"],
 };
 
