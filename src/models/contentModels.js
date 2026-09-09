@@ -214,6 +214,13 @@ export const SiteText = mongoose.model(
                 type: mongoose.Schema.Types.Mixed,
                 default: {},
             },
+            // Cloudinary public IDs for binary assets attached to
+            // this key (e.g. { resume: "portfolio/documents/xyz" }).
+            // Never returned to the public site.
+            assets: {
+                type: mongoose.Schema.Types.Mixed,
+                default: {},
+            },
             updatedBy: {
                 type: mongoose.Schema.Types.ObjectId,
                 ref: "Admin",

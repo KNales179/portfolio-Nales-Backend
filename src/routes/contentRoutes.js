@@ -4,10 +4,12 @@ import {
     getSiteText,
     updateSiteText,
     getAllPublicContent,
+    uploadResume,
     collectionMiddleware,
 } from "../controllers/contentController.js";
 
 import { protect } from "../middleware/authMiddleware.js";
+import { uploadDocument } from "../middleware/uploadMiddleware.js";
 
 const router = express.Router();
 
@@ -25,6 +27,30 @@ router.get("/", getAllPublicContent);
 
 router.get("/text/:key", getSiteText);
 router.patch("/text/:key", protect, updateSiteText);
+
+
+// ============================================================
+// RÉSUMÉ (PDF upload)
+// ============================================================
+
+router.post(
+    "/resume",
+    protect,
+    (req, res, next) => {
+        uploadDocument.single("resume")(req, res, (err) => {
+            if (err) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        err.message ||
+                        "Unable to read the uploaded file.",
+                });
+            }
+            next();
+        });
+    },
+    uploadResume
+);
 
 
 // ============================================================

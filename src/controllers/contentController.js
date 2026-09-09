@@ -202,6 +202,104 @@ export const updateSiteText = async (req, res) => {
 };
 
 
+// ============================================================
+// RÉSUMÉ (PDF)  —  stored under the "site" SiteText key
+// ============================================================
+
+export const uploadResume = async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({
+                success: false,
+                message: "No PDF file provided.",
+            });
+        }
+
+        const cloudinary = req.app.locals.cloudinary;
+
+        const doc =
+            (await SiteText.findOne({ key: "site" })) ||
+            new SiteText({ key: "site", values: {}, assets: {} });
+
+        const oldPublicId = doc.assets?.resume || null;
+        const oldUrl = doc.values?.resumeUrl || null;
+
+        // Cloudinary treats PDFs as "raw" assets.
+        const result = await new Promise((resolve, reject) => {
+            const stream = cloudinary.uploader.upload_stream(
+                {
+                    folder: "portfolio/documents",
+                    resource_type: "raw",
+                    public_id: `resume-${Date.now()}.pdf`,
+                },
+                (error, uploaded) => {
+                    if (error) {
+                        reject(error);
+                    } else {
+                        resolve(uploaded);
+                    }
+                }
+            );
+
+            stream.end(req.file.buffer);
+        });
+
+        doc.values = {
+            ...(doc.values || {}),
+            resumeUrl: result.secure_url,
+        };
+        doc.assets = {
+            ...(doc.assets || {}),
+            resume: result.public_id,
+        };
+        doc.updatedBy = req.user._id;
+        doc.markModified("values");
+        doc.markModified("assets");
+        await doc.save();
+
+        // Best-effort cleanup of the previous file.
+        if (oldPublicId) {
+            try {
+                await cloudinary.uploader.destroy(oldPublicId, {
+                    resource_type: "raw",
+                });
+            } catch (cleanupError) {
+                console.error(
+                    "Failed to remove old résumé from Cloudinary:",
+                    cleanupError.message
+                );
+            }
+        }
+
+        await recordContentChange({
+            req,
+            action: "UPDATE",
+            resource: "PROFILE",
+            resourceId: doc._id,
+            resourceName: "résumé",
+            changes: [
+                {
+                    field: "resumeUrl",
+                    before: oldUrl,
+                    after: result.secure_url,
+                },
+            ],
+        });
+
+        return res.json({
+            success: true,
+            data: { resumeUrl: result.secure_url },
+        });
+    } catch (error) {
+        console.error("Upload résumé error:", error.message);
+        return res.status(500).json({
+            success: false,
+            message: "Unable to upload the résumé.",
+        });
+    }
+};
+
+
 // A single call that returns everything the public site needs,
 // so the frontend can hydrate in one request.
 export const getAllPublicContent = async (req, res) => {

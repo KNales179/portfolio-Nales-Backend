@@ -167,7 +167,7 @@ export const deleteProfileImage = async (req, res) => {
 
         if (publicId) {
             try {
-                await cloudinary.uploader.destroy(
+                await req.app.locals.cloudinary.uploader.destroy(
                     publicId,
                     {
                         resource_type: "image",
@@ -268,7 +268,7 @@ export const uploadImage = async (req, res) => {
         const result = await new Promise(
             (resolve, reject) => {
                 const stream =
-                    cloudinary.uploader.upload_stream(
+                    req.app.locals.cloudinary.uploader.upload_stream(
                         {
                             folder: `portfolio/${uploadType.toLowerCase()}`,
                             resource_type: "image",
@@ -438,7 +438,7 @@ export const deleteImage = async (req, res) => {
         // Delete from Cloudinary
         // --------------------------------------------------------
 
-        await cloudinary.uploader.destroy(
+        await req.app.locals.cloudinary.uploader.destroy(
             upload.publicId,
             {
                 resource_type: "image",

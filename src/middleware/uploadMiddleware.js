@@ -20,4 +20,25 @@ const upload = multer({
   },
 });
 
+// ------------------------------------------------------------
+// PDF documents (the résumé). Kept separate from image uploads
+// so the mime filter and size limit can differ.
+// ------------------------------------------------------------
+
+const pdfFilter = (req, file, cb) => {
+  if (file.mimetype === "application/pdf") {
+    cb(null, true);
+  } else {
+    cb(new Error("Only PDF files are allowed"), false);
+  }
+};
+
+export const uploadDocument = multer({
+  storage,
+  fileFilter: pdfFilter,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10 MB
+  },
+});
+
 export default upload;
