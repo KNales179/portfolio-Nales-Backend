@@ -71,3 +71,29 @@ export const passwordResetRateLimiter = rateLimit({
             "Too many password reset attempts. Please try again later.",
     },
 });
+
+// ============================================================
+// ANALYTICS COLLECT RATE LIMITER
+// ============================================================
+//
+// The portfolio batches analytics events and flushes them
+// periodically / on page hide, so a normal visitor sends only
+// a handful of requests per minute. This cap is generous enough
+// for real browsing but blocks a client stuck in a send loop.
+//
+// 60 batches per minute per IP.
+// ============================================================
+
+export const analyticsCollectRateLimiter = rateLimit({
+    windowMs: 60 * 1000,
+
+    max: 60,
+
+    standardHeaders: true,
+    legacyHeaders: false,
+
+    message: {
+        success: false,
+        message: "Too many analytics requests.",
+    },
+});
