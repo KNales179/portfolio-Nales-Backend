@@ -6,6 +6,7 @@
   "scripts": {
     "download-geoip": "node src/scripts/downloadGeoIp.js",
     "seed:projects": "node src/scripts/seedProjects.js",
+    "seed:content": "node src/scripts/seedContent.js",
     "dev": "nodemon src/server.js",
     "start": "node src/server.js"
   },

@@ -1,0 +1,272 @@
+{
+  "skills": [
+    {
+      "name": "Languages",
+      "icon": "Code2",
+      "items": [
+        "TypeScript",
+        "JavaScript",
+        "SQL",
+        "Python"
+      ],
+      "order": 1
+    },
+    {
+      "name": "Frameworks",
+      "icon": "Layers",
+      "items": [
+        "React",
+        "React Native",
+        "Node.js",
+        "Express",
+        "Vite",
+        "Expo",
+        "NativeWind",
+        "Django"
+      ],
+      "order": 2
+    },
+    {
+      "name": "Databases",
+      "icon": "Database",
+      "items": [
+        "MongoDB",
+        "MySQL",
+        "MongoDB Atlas",
+        "AsyncStorage",
+        "SQLite",
+        "PostgreSQL"
+      ],
+      "order": 3
+    },
+    {
+      "name": "Tools",
+      "icon": "Wrench",
+      "items": [
+        "Figma",
+        "Git",
+        "GitHub",
+        "Tailwind CSS",
+        "MapLibre",
+        "GraphHopper",
+        "OpenStreetMap",
+        "Twilio",
+        "Cloudinary",
+        "Render",
+        "Brevo",
+        "Vercel",
+        "Render"
+      ],
+      "order": 4
+    }
+  ],
+  "journey": [
+    {
+      "year": "2022",
+      "title": "Started Basic Coding",
+      "description": "Started college with no coding background and learned the fundamentals of programming through Python, including basic syntax, inputs, buttons, text display, and the classic “Hello World” program.",
+      "order": 1
+    },
+    {
+      "year": "2023",
+      "title": "Started Advanced Coding",
+      "description": "Moved from basic programming into more structured application development, learning how to build simple systems, understand logic flow, and create more functional user interfaces.",
+      "order": 2
+    },
+    {
+      "year": "2024",
+      "title": "Learned APIs, Backend, and Databases",
+      "description": "Expanded into backend development, API integration, authentication, database handling, and connecting frontend systems with server-side logic.",
+      "order": 3
+    },
+    {
+      "year": "2025",
+      "title": "Developed TODA-GO",
+      "description": "Built TODA-GO, a tricycle ride-hailing platform with passenger and driver mobile apps, backend services, location-based features, and a web-based admin dashboard.",
+      "order": 4
+    },
+    {
+      "year": "2026",
+      "title": "Completed Major Systems",
+      "description": "Completed TODA-GO and the Tricycle Integration Record System, presented the projects, participated in research activities, and graduated from the BSIT program. Since then, I’ve continued learning by building various web and mobile applications, experimenting with new technologies, and embracing the world of vibe coding.",
+      "order": 5
+    }
+  ],
+  "awards": [
+    {
+      "title": "Social Impact / Tech for Good Award",
+      "category": "Capstone Recognition",
+      "description": "Awarded to TODA-GO for focusing on community transportation improvement and real-world social value.",
+      "icon": "Award",
+      "order": 1
+    },
+    {
+      "title": "Most Improved Student",
+      "category": "BSIT Department",
+      "description": "Recognition from the BSIT Department for significant academic, technical, and personal growth.",
+      "icon": "TrendingUp",
+      "order": 2
+    },
+    {
+      "title": "Distinguished Departmental Service Award",
+      "category": "Service Recognition",
+      "description": "Recognition for exceptional service, dedication, and contribution to the department.",
+      "icon": "HeartHandshake",
+      "order": 3
+    },
+    {
+      "title": "DLL Research Congress Participation",
+      "category": "Research Participation",
+      "description": "Certificate of participation for presenting and representing technical research during the DLL Research Congress.",
+      "icon": "Microscope",
+      "order": 4
+    }
+  ],
+  "strengths": [
+    {
+      "title": "Logical Thinking",
+      "description": "I focus on workflows, system logic, and solving problems in a structured way.",
+      "icon": "BrainCircuit",
+      "order": 1
+    },
+    {
+      "title": "Feature Planning",
+      "description": "I turn real user needs into practical features that make the system useful and easier to manage.",
+      "icon": "Lightbulb",
+      "order": 2
+    },
+    {
+      "title": "Continuous Learning",
+      "description": "I learn new tools and technologies when a project requires them, instead of limiting myself to what I already know.",
+      "icon": "Rocket",
+      "order": 3
+    }
+  ],
+  "hobbies": [
+    {
+      "title": "Learning & Experimenting with Code",
+      "description": "Learning new things, experimenting with code, and exploring different ways to build and solve problems.",
+      "order": 1
+    },
+    {
+      "title": "Gaming",
+      "description": "Playing games for fun, exploring different genres, and getting immersed in different worlds and experiences.",
+      "order": 2
+    },
+    {
+      "title": "Movies & Series",
+      "description": "Watching movies and series whenever I want to relax, discover new stories, or simply enjoy some downtime.",
+      "order": 3
+    },
+    {
+      "title": "Reading",
+      "description": "Reading whenever I find something interesting, from technical topics to stories and random subjects that catch my attention.",
+      "order": 4
+    },
+    {
+      "title": "Exploring New Technology",
+      "description": "Trying new tools, frameworks, libraries, and technologies that catch my interest.",
+      "order": 5
+    },
+    {
+      "title": "Building Side Projects",
+      "description": "Turning random ideas into small projects and experimenting with different ways to build them.",
+      "order": 6
+    },
+    {
+      "title": "Creative Experimentation",
+      "description": "Playing around with ideas, interfaces, animations, and different approaches to creating digital experiences.",
+      "order": 7
+    }
+  ],
+  "certificates": [
+    {
+      "title": "Introduction to Cybersecurity",
+      "issuer": "Cisco",
+      "verifyUrl": "https://www.credly.com/badges/1684af74-8fc0-4df3-8d9e-37d20b80b174",
+      "image": "certificates/Cybersecurity_intro.png",
+      "order": 1
+    },
+    {
+      "title": "Ethical Hacker",
+      "issuer": "Cisco",
+      "verifyUrl": "https://www.credly.com/badges/f1498d56-a6c0-4009-954f-d8fea6586fd1",
+      "image": "certificates/Ethical_hacker.png",
+      "order": 2
+    },
+    {
+      "title": "Networking Basics",
+      "issuer": "Cisco",
+      "verifyUrl": "https://www.credly.com/badges/453b327a-9810-4a01-b85f-e1ffc5c6ae60",
+      "image": "certificates/Networking_basics.png",
+      "order": 3
+    },
+    {
+      "title": "Python Developer",
+      "issuer": "SoloLearn",
+      "verifyUrl": "https://www.sololearn.com/certificates/CC-YIFBLQFD",
+      "image": "certificates/PythonDev.jpg",
+      "order": 4
+    }
+  ],
+  "contactLinks": [
+    {
+      "label": "Email",
+      "value": "ibelldev179@gmail.com",
+      "href": "mailto:ibelldev179@gmail.com",
+      "icon": "Mail",
+      "external": false,
+      "download": false,
+      "order": 1
+    },
+    {
+      "label": "Facebook",
+      "value": "Connect with me",
+      "href": "https://www.facebook.com/lehvi.ben",
+      "icon": "FaFacebook",
+      "external": true,
+      "download": false,
+      "order": 2
+    },
+    {
+      "label": "Instagram",
+      "value": "Follow me",
+      "href": "https://www.instagram.com/levi.cohen179?igsi=MWdjMmZrNTJzNXJrdQ==",
+      "icon": "FaInstagram",
+      "external": true,
+      "download": false,
+      "order": 3
+    },
+    {
+      "label": "LinkedIn",
+      "value": "Professional profile",
+      "href": "https://www.linkedin.com/in/ivhel-nales-996189419",
+      "icon": "FaLinkedin",
+      "external": true,
+      "download": false,
+      "order": 4
+    },
+    {
+      "label": "WhatsApp",
+      "value": "Chat with me",
+      "href": "https://api.whatsapp.com/send?phone=639635321913",
+      "icon": "FaWhatsapp",
+      "external": true,
+      "download": false,
+      "order": 5
+    }
+  ],
+  "text": {
+    "hero": {
+      "greeting": "Hello, I'm",
+      "name": "Ivhel",
+      "role": "Mobile & Full Stack Developer",
+      "description": "I’m a developer who enjoys turning ideas into practical digital experiences. I’m always learning, experimenting with new technologies, and looking for better ways to build, solve problems, and create."
+    },
+    "about": {
+      "label": "About Me",
+      "title": "Building practical systems through logic, planning, and continuous learning.",
+      "description": "I’m a Full Stack Developer who enjoys both building and experimenting with technology. I love creating interactive interfaces and experiences on the frontend, but I’m especially interested in what happens behind them—the logic, data, APIs, and systems that make everything work. For me, a good application isn’t just about how it looks; I care just as much about what happens underneath and whether the whole thing actually works the way it should."
+    }
+  }
+}
