@@ -1,10 +1,30 @@
 import bcrypt from "bcryptjs";
 import Admin from "../models/Admin.js";
 import AuditLog from "../models/AuditLog.js";
+import AdminSession from "../models/AdminSession.js";
 
-import {
-    verify,
-} from "otplib";
+import { verifyTwoFactorCode } from "../utils/twoFactor.js";
+
+
+// ============================================================
+// REVOKE OTHER SESSIONS
+// ============================================================
+//
+// Called after a password change: every session except the one
+// making the request is revoked, so a stolen token on another
+// device stops working.
+// ============================================================
+
+const revokeOtherSessions = async (adminId, currentSessionId) => {
+    await AdminSession.updateMany(
+        {
+            admin: adminId,
+            sessionId: { $ne: currentSessionId || null },
+            revokedAt: null,
+        },
+        { $set: { revokedAt: new Date() } }
+    );
+};
 
 
 // ============================================================
@@ -234,6 +254,11 @@ export const changeMyPassword = async (req, res) => {
 
     await admin.save();
 
+    await revokeOtherSessions(
+      admin._id,
+      req.session?.sessionId
+    );
+
     await AuditLog.create({
       admin: req.user._id,
       action: "PASSWORD_CHANGE",
@@ -329,6 +354,11 @@ export const completeFirstLogin = async (req, res) => {
     admin.mustChangePassword = false;
 
     await admin.save();
+
+    await revokeOtherSessions(
+      admin._id,
+      req.session?.sessionId
+    );
 
     await AuditLog.create({
       admin: admin._id,
@@ -770,9 +800,7 @@ export const resetPasswordWithTwoFactor = async (
         const admin =
             await Admin.findById(
                 req.user._id
-            ).select(
-                "+password +twoFactorSecret"
-            );
+            ).select("+password +twoFactorSecret +twoFactorLastUsedStep");
 
         if (!admin) {
             return res.status(404).json({
@@ -810,17 +838,14 @@ export const resetPasswordWithTwoFactor = async (
         }
 
         // ----------------------------------------------------
-        // VERIFY 2FA
+        // VERIFY 2FA (with replay protection)
         // ----------------------------------------------------
 
         const verification =
-            await verify({
-                secret:
-                    admin.twoFactorSecret,
-
-                token:
-                    normalizedCode,
-            });
+            await verifyTwoFactorCode(
+                admin,
+                normalizedCode
+            );
 
         if (!verification.valid) {
             await AuditLog.create({
@@ -865,6 +890,15 @@ export const resetPasswordWithTwoFactor = async (
             false;
 
         await admin.save();
+
+        // ----------------------------------------------------
+        // SIGN OUT OTHER DEVICES
+        // ----------------------------------------------------
+
+        await revokeOtherSessions(
+            admin._id,
+            req.session?.sessionId
+        );
 
         // ----------------------------------------------------
         // AUDIT

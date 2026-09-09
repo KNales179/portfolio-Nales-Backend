@@ -108,6 +108,40 @@ export const protect = async (req, res, next) => {
             });
         }
 
+        // ----------------------------------------------------
+        // FORCED PASSWORD CHANGE
+        // ----------------------------------------------------
+        //
+        // An admin flagged `mustChangePassword` may only reach
+        // the endpoints needed to view their account and set a
+        // new password. Everything else is blocked until done.
+        // ----------------------------------------------------
+
+        if (admin.mustChangePassword) {
+            const url = req.originalUrl.split("?")[0];
+
+            const allowedWhilePasswordChangeRequired = [
+                "/api/auth/me",
+                "/api/auth/logout",
+                "/api/admin/profile",
+                "/api/admin/profile/password",
+                "/api/admin/profile/complete-first-login",
+            ];
+
+            if (
+                !allowedWhilePasswordChangeRequired.includes(
+                    url
+                )
+            ) {
+                return res.status(403).json({
+                    success: false,
+                    code: "PASSWORD_CHANGE_REQUIRED",
+                    message:
+                        "You must change your password before continuing.",
+                });
+            }
+        }
+
         session.lastUsedAt = new Date();
 
         await session.save();

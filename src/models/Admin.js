@@ -135,6 +135,14 @@ const adminSchema = new mongoose.Schema(
             select: false,
         },
 
+        // Last TOTP time-step accepted for this admin. Used to
+        // reject replay of a code within its validity window.
+        twoFactorLastUsedStep: {
+            type: Number,
+            default: null,
+            select: false,
+        },
+
         trustedDevices: {
             type: [trustedDeviceSchema],
             default: [],

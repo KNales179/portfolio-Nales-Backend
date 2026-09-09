@@ -23,7 +23,6 @@ import { protect } from "../middleware/authMiddleware.js";
 import {
     loginRateLimiter,
     twoFactorRateLimiter,
-    passwordResetRateLimiter,
 } from "../middleware/rateLimitMiddleware.js";
 
 const router = express.Router();
@@ -34,6 +33,7 @@ const router = express.Router();
 
 router.post(
     "/setup-superadmin",
+    loginRateLimiter,
     setupSuperAdmin
 );
 
@@ -114,6 +114,7 @@ router.get(
 router.post(
     "/trusted-devices",
     protect,
+    twoFactorRateLimiter,
     trustCurrentDevice,
 );
 
@@ -121,6 +122,7 @@ router.post(
 router.post(
     "/trusted-devices/:deviceId",
     protect,
+    twoFactorRateLimiter,
     trustDeviceById
 );
 
@@ -128,6 +130,7 @@ router.post(
 router.delete(
     "/trusted-devices/:deviceId",
     protect,
+    twoFactorRateLimiter,
     removeTrustedDevice
 );
 
@@ -135,6 +138,7 @@ router.delete(
 router.delete(
     "/trusted-devices/:deviceId/permanent",
     protect,
+    twoFactorRateLimiter,
     deleteDevice
 );
 

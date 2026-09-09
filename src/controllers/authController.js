@@ -1,5 +1,4 @@
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
 import Admin from "../models/Admin.js";
 import AuditLog from "../models/AuditLog.js";
 import AdminSession from "../models/AdminSession.js";
@@ -12,12 +11,22 @@ import {
 import {
   generateSecret,
   generateURI,
-  verify,
 } from "otplib";
 
 import QRCode from "qrcode";
 
-const sessionId = crypto.randomUUID();
+import { encryptSecret } from "../utils/secretCrypto.js";
+import {
+  signTwoFactorChallenge,
+  verifyTwoFactorChallenge,
+  verifyTwoFactorCode,
+} from "../utils/twoFactor.js";
+
+// A never-matching bcrypt hash, compared against on the
+// "user not found" path so that response timing does not
+// reveal whether a username exists.
+const DUMMY_PASSWORD_HASH =
+  "$2a$12$0000000000000000000000000000000000000000000000000000o";
 
 // ============================================================
 // CONSTANTS
@@ -40,7 +49,7 @@ const TWO_FACTOR_ISSUER =
 // LOGIN BRUTE-FORCE PROTECTION
 // ============================================================
 
-const MAX_FAILED_LOGIN_ATTEMPTS = 12;
+const MAX_FAILED_LOGIN_ATTEMPTS = 8;
 
 const LOGIN_LOCK_DURATION_MS =
   30 * 60 * 1000;
@@ -306,6 +315,14 @@ export const login = async (req, res) => {
       }).select("+password");
 
     if (!admin) {
+      // Spend roughly the same time as a real bcrypt compare so
+      // response timing doesn't reveal that the username is
+      // unknown.
+      await bcrypt.compare(
+        String(password),
+        DUMMY_PASSWORD_HASH
+      );
+
       return res.status(401).json({
         success: false,
         message:
@@ -461,12 +478,27 @@ export const login = async (req, res) => {
       // CHECK TRUSTED DEVICE
       // ------------------------------------------------------
 
-      const trustedDevice =
+      const requestUserAgent =
+        req.get("user-agent") || "";
+
+      const candidateTrustedDevice =
         deviceId
           ? admin.trustedDevices.find(
             (device) =>
               device.deviceId === deviceId
           )
+          : null;
+
+      // The client-supplied deviceId is not sufficient on its
+      // own to skip 2FA — the request must also come from the
+      // same user agent that was recorded when the device was
+      // trusted. A leaked deviceId alone is then not enough.
+      const trustedDevice =
+        candidateTrustedDevice &&
+        candidateTrustedDevice.userAgent &&
+        candidateTrustedDevice.userAgent ===
+          requestUserAgent
+          ? candidateTrustedDevice
           : null;
 
       // ------------------------------------------------------
@@ -498,10 +530,6 @@ export const login = async (req, res) => {
 
           await admin.save();
 
-          console.log(
-            "Trusted device accepted without 2FA"
-          );
-
           // Continue to normal session creation below.
         }
 
@@ -511,16 +539,12 @@ export const login = async (req, res) => {
 
         else {
           const challengeToken =
-            jwt.sign(
+            signTwoFactorChallenge(
               {
                 id: admin._id.toString(),
-                type: "2FA_CHALLENGE",
                 purpose: "RENEWAL",
                 deviceId,
               },
-
-              process.env.JWT_SECRET,
-
               {
                 expiresIn:
                   TWO_FACTOR_CHALLENGE_EXPIRES_IN,
@@ -570,16 +594,12 @@ export const login = async (req, res) => {
 
       else {
         const challengeToken =
-          jwt.sign(
+          signTwoFactorChallenge(
             {
               id: admin._id.toString(),
-              type: "2FA_CHALLENGE",
               purpose: "VERIFICATION",
               deviceId,
             },
-
-            process.env.JWT_SECRET,
-
             {
               expiresIn:
                 TWO_FACTOR_CHALLENGE_EXPIRES_IN,
@@ -638,26 +658,16 @@ export const login = async (req, res) => {
     const ipLocation =
       await getIpLocation(req.ip);
 
-    console.log("===== GEOIP DEBUG =====");
-    console.log("req.ip:", req.ip);
-    console.log(
-      "x-forwarded-for:",
-      req.get("x-forwarded-for")
-    );
-    console.log(
-      "socket remote address:",
-      req.socket.remoteAddress
-    );
-    console.log("======================");
+    const newSessionId = crypto.randomUUID();
 
     const session = await AdminSession.create({
       admin: admin._id,
 
-      sessionId,
+      sessionId: newSessionId,
 
       deviceId:
         req.get("x-device-id") ||
-        sessionId,
+        newSessionId,
 
       deviceName,
 
@@ -788,9 +798,8 @@ export const verifyLoginTwoFactor = async (
     let decoded;
 
     try {
-      decoded = jwt.verify(
-        challengeToken,
-        process.env.JWT_SECRET
+      decoded = verifyTwoFactorChallenge(
+        challengeToken
       );
     } catch (error) {
       if (
@@ -812,24 +821,8 @@ export const verifyLoginTwoFactor = async (
     }
 
     // --------------------------------------------------------
-    // MAKE SURE THIS IS A 2FA CHALLENGE
-    // --------------------------------------------------------
-
-    if (
-      decoded.type !==
-      "2FA_CHALLENGE"
-    ) {
-      return res.status(401).json({
-        success: false,
-        message:
-          "Invalid 2FA challenge",
-      });
-    }
-
-    // --------------------------------------------------------
     // VALIDATE CHALLENGE PURPOSE
     // --------------------------------------------------------
-
 
     if (
       !["VERIFICATION", "RENEWAL"].includes(
@@ -844,15 +837,31 @@ export const verifyLoginTwoFactor = async (
     }
 
     // --------------------------------------------------------
+    // CHALLENGE MUST MATCH THE REQUESTING DEVICE
+    // --------------------------------------------------------
+
+    const requestDeviceId =
+      req.get("x-device-id") || null;
+
+    if (
+      (decoded.deviceId || null) !==
+      requestDeviceId
+    ) {
+      return res.status(401).json({
+        success: false,
+        message:
+          "This 2FA challenge was issued for a different device. Please login again.",
+      });
+    }
+
+    // --------------------------------------------------------
     // FIND ADMIN
     // --------------------------------------------------------
 
     const admin =
       await Admin.findById(
         decoded.id
-      ).select(
-        "+twoFactorSecret"
-      );
+      ).select("+twoFactorSecret +twoFactorLastUsedStep");
 
     if (!admin) {
       return res.status(401).json({
@@ -890,38 +899,11 @@ export const verifyLoginTwoFactor = async (
     }
 
     // --------------------------------------------------------
-    // NORMALIZE CODE
-    // --------------------------------------------------------
-
-    const normalizedCode =
-      String(code)
-        .replace(/\s/g, "")
-        .trim();
-
-    if (
-      !/^\d{6}$/.test(
-        normalizedCode
-      )
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "2FA code must contain 6 digits",
-      });
-    }
-
-    // --------------------------------------------------------
-    // VERIFY TOTP
+    // VERIFY TOTP (with replay protection)
     // --------------------------------------------------------
 
     const verification =
-      await verify({
-        secret:
-          admin.twoFactorSecret,
-
-        token:
-          normalizedCode,
-      });
+      await verifyTwoFactorCode(admin, code);
 
     if (!verification.valid) {
       await AuditLog.create({
@@ -935,7 +917,9 @@ export const verifyLoginTwoFactor = async (
         resourceId: admin._id,
 
         description:
-          "Invalid 2FA verification code",
+          verification.reason === "REPLAY"
+            ? "Reused 2FA verification code"
+            : "Invalid 2FA verification code",
 
         ipAddress: req.ip,
 
@@ -994,27 +978,17 @@ export const verifyLoginTwoFactor = async (
     const ipLocation =
       await getIpLocation(req.ip);
 
-    console.log("===== GEOIP DEBUG =====");
-    console.log("req.ip:", req.ip);
-    console.log(
-      "x-forwarded-for:",
-      req.get("x-forwarded-for")
-    );
-    console.log(
-      "socket remote address:",
-      req.socket.remoteAddress
-    );
-    console.log("======================");
+    const newSessionId = crypto.randomUUID();
 
     const session =
       await AdminSession.create({
         admin: admin._id,
 
-        sessionId,
+        sessionId: newSessionId,
 
         deviceId:
           req.get("x-device-id") ||
-          sessionId,
+          newSessionId,
 
         deviceName,
 
@@ -1146,9 +1120,7 @@ export const trustCurrentDevice = async (
     const admin =
       await Admin.findById(
         req.user._id
-      ).select(
-        "+twoFactorSecret"
-      );
+      ).select("+twoFactorSecret +twoFactorLastUsedStep");
 
     if (!admin) {
       return res.status(404).json({
@@ -1209,13 +1181,7 @@ export const trustCurrentDevice = async (
     // --------------------------------------------------------
 
     const verification =
-      await verify({
-        secret:
-          admin.twoFactorSecret,
-
-        token:
-          normalizedCode,
-      });
+      await verifyTwoFactorCode(admin, normalizedCode);
 
     if (!verification.valid) {
       await AuditLog.create({
@@ -1432,9 +1398,7 @@ export const trustDeviceById = async (
     const admin =
       await Admin.findById(
         req.user._id
-      ).select(
-        "+twoFactorSecret"
-      );
+      ).select("+twoFactorSecret +twoFactorLastUsedStep");
 
     if (!admin) {
       return res.status(404).json({
@@ -1540,13 +1504,7 @@ export const trustDeviceById = async (
     // ------------------------------------------------------
 
     const verification =
-      await verify({
-        secret:
-          admin.twoFactorSecret,
-
-        token:
-          normalizedCode,
-      });
+      await verifyTwoFactorCode(admin, normalizedCode);
 
     if (!verification.valid) {
       await AuditLog.create({
@@ -1967,7 +1925,7 @@ export const deleteDevice = async (
     const admin =
       await Admin.findById(
         req.user._id
-      ).select("+twoFactorSecret");
+      ).select("+twoFactorSecret +twoFactorLastUsedStep");
 
     if (!admin) {
       return res.status(404).json({
@@ -2010,13 +1968,7 @@ export const deleteDevice = async (
     }
 
     const verification =
-      await verify({
-        secret:
-          admin.twoFactorSecret,
-
-        token:
-          normalizedCode,
-      });
+      await verifyTwoFactorCode(admin, normalizedCode);
 
     if (!verification.valid) {
       await AuditLog.create({
@@ -2199,9 +2151,7 @@ export const removeTrustedDevice = async (
     const admin =
       await Admin.findById(
         req.user._id
-      ).select(
-        "+twoFactorSecret"
-      );
+      ).select("+twoFactorSecret +twoFactorLastUsedStep");
 
     if (!admin) {
       return res.status(404).json({
@@ -2252,13 +2202,7 @@ export const removeTrustedDevice = async (
     // --------------------------------------------------------
 
     const verification =
-      await verify({
-        secret:
-          admin.twoFactorSecret,
-
-        token:
-          normalizedCode,
-      });
+      await verifyTwoFactorCode(admin, normalizedCode);
 
     if (!verification.valid) {
       await AuditLog.create({
@@ -2499,9 +2443,7 @@ export const setupTwoFactor = async (
     const admin =
       await Admin.findById(
         req.user._id
-      ).select(
-        "+twoFactorSecret"
-      );
+      ).select("+twoFactorSecret +twoFactorLastUsedStep");
 
     if (!admin) {
       return res.status(404).json({
@@ -2555,7 +2497,11 @@ export const setupTwoFactor = async (
     // --------------------------------------------------------
 
     admin.twoFactorSecret =
-      secret;
+      encryptSecret(secret);
+
+    // A fresh secret invalidates any previously recorded
+    // TOTP step.
+    admin.twoFactorLastUsedStep = null;
 
     await admin.save();
 
@@ -2619,9 +2565,7 @@ export const enableTwoFactor = async (
     const admin =
       await Admin.findById(
         req.user._id
-      ).select(
-        "+twoFactorSecret"
-      );
+      ).select("+twoFactorSecret +twoFactorLastUsedStep");
 
     if (!admin) {
       return res.status(404).json({
@@ -2673,13 +2617,7 @@ export const enableTwoFactor = async (
     // --------------------------------------------------------
 
     const verification =
-      await verify({
-        secret:
-          admin.twoFactorSecret,
-
-        token:
-          normalizedCode,
-      });
+      await verifyTwoFactorCode(admin, normalizedCode);
 
     if (!verification.valid) {
       return res.status(400).json({
@@ -2771,9 +2709,7 @@ export const disableTwoFactor = async (
       await Admin.findById(
         req.user._id
       )
-        .select(
-          "+password +twoFactorSecret"
-        );
+        .select("+password +twoFactorSecret +twoFactorLastUsedStep");
 
     if (!admin) {
       return res.status(404).json({
@@ -2822,13 +2758,7 @@ export const disableTwoFactor = async (
         .trim();
 
     const verification =
-      await verify({
-        secret:
-          admin.twoFactorSecret,
-
-        token:
-          normalizedCode,
-      });
+      await verifyTwoFactorCode(admin, normalizedCode);
 
     if (!verification.valid) {
       return res.status(401).json({
@@ -2846,6 +2776,9 @@ export const disableTwoFactor = async (
       false;
 
     admin.twoFactorSecret =
+      null;
+
+    admin.twoFactorLastUsedStep =
       null;
 
     await admin.save();
@@ -2911,7 +2844,7 @@ export const getCurrentAdmin = async (
       await Admin.findById(
         req.user._id
       ).select(
-        "-password -twoFactorSecret"
+        "-password -twoFactorSecret -twoFactorLastUsedStep -trustedDevices"
       );
 
     if (!admin) {
@@ -2958,15 +2891,12 @@ export const logout = async (
   res
 ) => {
   try {
-    const admin = await Admin.findById(
-      req.user._id
-    );
-
-    if (admin) {
-      admin.tokenVersion =
-        (admin.tokenVersion || 0) + 1;
-
-      await admin.save();
+    // Revoke only THIS session — other devices stay signed in.
+    // (A full "sign out everywhere" is a separate action and is
+    //  what a password change / 2FA change does via tokenVersion.)
+    if (req.session && !req.session.revokedAt) {
+      req.session.revokedAt = new Date();
+      await req.session.save();
     }
 
     await AuditLog.create({
