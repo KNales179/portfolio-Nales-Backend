@@ -3,6 +3,7 @@ import express from "express";
 import {
     collectEvents,
     getPageAnalytics,
+    getInteractionAnalytics,
 } from "../controllers/analyticsController.js";
 
 import { protect } from "../middleware/authMiddleware.js";
@@ -30,6 +31,12 @@ router.get(
     "/pages",
     protect,
     getPageAnalytics
+);
+
+router.get(
+    "/interactions",
+    protect,
+    getInteractionAnalytics
 );
 
 

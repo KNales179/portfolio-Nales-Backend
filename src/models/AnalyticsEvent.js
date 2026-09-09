@@ -27,14 +27,40 @@ import mongoose from "mongoose";
 // EVENT TYPES
 // ============================================================
 //
-// Phase 1 only writes PAGE_VIEW / PAGE_EXIT. The enum is kept
-// open-ended so later phases (interactions, Play presets, etc.)
-// can add types without a migration.
+// The enum is kept open-ended so later phases (Play presets,
+// etc.) can add types without a migration.
+//
+//   PAGE_VIEW / PAGE_EXIT  — Phase 1 (page analytics)
+//   INTERACTION            — Phase 2 (interaction analytics);
+//                            the specific action is in `action`
 // ============================================================
 
 export const ANALYTICS_EVENT_TYPES = [
     "PAGE_VIEW",
     "PAGE_EXIT",
+    "INTERACTION",
+];
+
+
+// ============================================================
+// INTERACTION ACTIONS
+// ============================================================
+//
+// The allowlist of `action` values accepted on INTERACTION
+// events. Anything not in this list is dropped at ingestion.
+// ============================================================
+
+export const ANALYTICS_INTERACTION_ACTIONS = [
+    "NAV_CLICK",
+    "PROJECT_OPENED",
+    "RESUME_DOWNLOAD",
+    "EMAIL_CLICK",
+    "GITHUB_CLICK",
+    "EXTERNAL_LINK_CLICK",
+    "CONTACT_FORM_OPENED",
+    "CONTACT_FORM_SUBMITTED",
+    "SCROLL_DEPTH",
+    "COPY",
 ];
 
 
@@ -171,6 +197,35 @@ const analyticsEventSchema = new mongoose.Schema(
 
 
         // ----------------------------------------------------
+        // INTERACTION (INTERACTION events only)
+        // ----------------------------------------------------
+
+        // The specific interaction, e.g. "PROJECT_OPENED".
+        // Validated against ANALYTICS_INTERACTION_ACTIONS.
+        action: {
+            type: String,
+            enum: [
+                ...ANALYTICS_INTERACTION_ACTIONS,
+                null,
+            ],
+            default: null,
+            immutable: true,
+        },
+
+        // Free-form subject of the interaction, e.g. a project
+        // title, an external domain, a nav destination, or a
+        // scroll-depth bucket ("50"). Never contains anything
+        // that identifies a visitor.
+        target: {
+            type: String,
+            default: null,
+            trim: true,
+            maxlength: 300,
+            immutable: true,
+        },
+
+
+        // ----------------------------------------------------
         // SERVER-DERIVED CONTEXT
         // ----------------------------------------------------
 
@@ -232,6 +287,12 @@ analyticsEventSchema.index({
 
 analyticsEventSchema.index({
     visitorHash: 1,
+    createdAt: -1,
+});
+
+analyticsEventSchema.index({
+    type: 1,
+    action: 1,
     createdAt: -1,
 });
 

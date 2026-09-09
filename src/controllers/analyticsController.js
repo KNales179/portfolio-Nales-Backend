@@ -1,5 +1,6 @@
 import AnalyticsEvent, {
     ANALYTICS_EVENT_TYPES,
+    ANALYTICS_INTERACTION_ACTIONS,
 } from "../models/AnalyticsEvent.js";
 
 import { getIpLocation } from "../utils/geoIp.js";
@@ -252,6 +253,27 @@ export const collectEvents = async (req, res) => {
                     ? normalizeDuration(event.durationMs)
                     : null;
 
+            // Interaction events must carry an allowlisted
+            // action; everything else is dropped.
+            let action = null;
+            let target = null;
+
+            if (event.type === "INTERACTION") {
+                if (
+                    !ANALYTICS_INTERACTION_ACTIONS.includes(
+                        event.action
+                    )
+                ) {
+                    continue;
+                }
+
+                action = event.action;
+
+                target = isNonEmptyString(event.target)
+                    ? event.target.trim().slice(0, 300)
+                    : null;
+            }
+
             documents.push({
                 type: event.type,
                 sessionId: event.sessionId.trim(),
@@ -259,6 +281,8 @@ export const collectEvents = async (req, res) => {
                 path: event.path.trim(),
                 referrer,
                 durationMs,
+                action,
+                target,
                 device,
                 geo,
                 ipAddress: ip || null,
@@ -553,6 +577,192 @@ export const getPageAnalytics = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: "Unable to load page analytics.",
+        });
+    }
+};
+
+
+// ============================================================
+// INTERACTION ANALYTICS  (admin)
+// ============================================================
+//
+// GET /api/analytics/interactions?period=today|7d|30d|year
+// ============================================================
+
+const TOP_TARGETS_PER_ACTION = 8;
+
+export const getInteractionAnalytics = async (req, res) => {
+    try {
+        const { period, start, end, granularity } =
+            resolvePeriod(req.query.period);
+
+        const [result] = await AnalyticsEvent.aggregate([
+            {
+                $match: {
+                    type: "INTERACTION",
+                    createdAt: {
+                        $gte: start,
+                        $lte: end,
+                    },
+                },
+            },
+            {
+                $facet: {
+                    total: [{ $count: "value" }],
+
+                    byAction: [
+                        {
+                            $group: {
+                                _id: "$action",
+                                count: { $sum: 1 },
+                            },
+                        },
+                        { $sort: { count: -1 } },
+                    ],
+
+                    byPage: [
+                        {
+                            $group: {
+                                _id: "$path",
+                                count: { $sum: 1 },
+                            },
+                        },
+                        { $sort: { count: -1 } },
+                        { $limit: 20 },
+                    ],
+
+                    targets: [
+                        {
+                            $match: {
+                                target: { $ne: null },
+                            },
+                        },
+                        {
+                            $group: {
+                                _id: {
+                                    action: "$action",
+                                    target: "$target",
+                                },
+                                count: { $sum: 1 },
+                            },
+                        },
+                        { $sort: { count: -1 } },
+                    ],
+
+                    series: [
+                        {
+                            $group: {
+                                _id: {
+                                    $dateTrunc: {
+                                        date: "$createdAt",
+                                        unit: granularity,
+                                    },
+                                },
+                                views: { $sum: 1 },
+                            },
+                        },
+                        { $sort: { _id: 1 } },
+                    ],
+                },
+            },
+        ]);
+
+        // ----------------------------------------------------
+        // BY ACTION
+        // ----------------------------------------------------
+
+        const byAction = (result.byAction || [])
+            .filter((row) => row._id)
+            .map((row) => ({
+                action: row._id,
+                count: row.count,
+            }));
+
+        // ----------------------------------------------------
+        // BY PAGE
+        // ----------------------------------------------------
+
+        const byPage = (result.byPage || [])
+            .filter((row) => row._id)
+            .map((row) => ({
+                path: row._id,
+                count: row.count,
+            }));
+
+        // ----------------------------------------------------
+        // TOP TARGETS, GROUPED BY ACTION
+        // ----------------------------------------------------
+
+        const topTargets = {};
+
+        for (const row of result.targets || []) {
+            const action = row._id?.action;
+            const target = row._id?.target;
+
+            if (!action || !target) {
+                continue;
+            }
+
+            if (!topTargets[action]) {
+                topTargets[action] = [];
+            }
+
+            if (
+                topTargets[action].length <
+                TOP_TARGETS_PER_ACTION
+            ) {
+                topTargets[action].push({
+                    target,
+                    count: row.count,
+                });
+            }
+        }
+
+        // ----------------------------------------------------
+        // TOTALS + SERIES
+        // ----------------------------------------------------
+
+        const totals = {
+            interactions: result.total?.[0]?.value || 0,
+            mostInteractedPage: byPage[0]?.path || null,
+        };
+
+        const series = buildContiguousSeries(
+            result.series || [],
+            start,
+            end,
+            granularity
+        ).map((point) => ({
+            date: point.date,
+            interactions: point.views,
+        }));
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                period,
+                range: {
+                    start: start.toISOString(),
+                    end: end.toISOString(),
+                },
+                granularity,
+                totals,
+                byAction,
+                byPage,
+                topTargets,
+                series,
+            },
+        });
+    } catch (error) {
+        console.error(
+            "Interaction analytics error:",
+            error.message
+        );
+
+        return res.status(500).json({
+            success: false,
+            message:
+                "Unable to load interaction analytics.",
         });
     }
 };
