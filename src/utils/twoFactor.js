@@ -53,6 +53,38 @@ export const verifyTwoFactorChallenge = (token) => {
 
 
 // ------------------------------------------------------------
+// STEP-UP TOKEN
+// ------------------------------------------------------------
+//
+// Issued after a fresh TOTP check to unlock a sensitive area
+// (admin management) for a short window, so the code isn't
+// re-typed for every action. Bound to one admin id.
+// ------------------------------------------------------------
+
+export const STEP_UP_TTL_SECONDS = 15 * 60;
+
+export const signStepUpToken = (adminId) =>
+    jwt.sign(
+        { type: "STEP_UP", sub: String(adminId) },
+        challengeSecret(),
+        { expiresIn: STEP_UP_TTL_SECONDS }
+    );
+
+
+export const verifyStepUpToken = (token) => {
+    const decoded = jwt.verify(token, challengeSecret());
+
+    if (decoded.type !== "STEP_UP") {
+        const error = new Error("Invalid step-up token");
+        error.name = "JsonWebTokenError";
+        throw error;
+    }
+
+    return decoded;
+};
+
+
+// ------------------------------------------------------------
 // CODE VERIFICATION (with replay protection)
 // ------------------------------------------------------------
 //

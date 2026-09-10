@@ -6,11 +6,13 @@ import {
     changeMyUsername,
     changeMyPassword,
     completeFirstLogin,
+    verifyStepUp,
     getAdmins,
     getAdminById,
     createAdmin,
     updateAdmin,
     updateAdminStatus,
+    setAdminPassword,
     deleteAdmin,
     resetPasswordWithTwoFactor,
 } from "../controllers/adminController.js";
@@ -19,8 +21,10 @@ import { getAuditLogs } from "../controllers/auditController.js";
 
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
+import { requireStepUp } from "../middleware/stepUpMiddleware.js";
 import {
     passwordResetRateLimiter,
+    twoFactorRateLimiter,
 } from "../middleware/rateLimitMiddleware.js";
 
 const router = express.Router();
@@ -80,8 +84,20 @@ router.get(
 /*
 |--------------------------------------------------------------------------
 | SUPER ADMIN - ADMIN MANAGEMENT
+|
+| Reads need only the SUPER_ADMIN role. Every write additionally
+| requires a fresh step-up 2FA token (X-Step-Up header) obtained
+| from POST /verify-2fa.
 |--------------------------------------------------------------------------
 */
+
+router.post(
+    "/verify-2fa",
+    protect,
+    authorize("SUPER_ADMIN"),
+    twoFactorRateLimiter,
+    verifyStepUp
+);
 
 router.get(
     "/",
@@ -101,6 +117,7 @@ router.post(
     "/",
     protect,
     authorize("SUPER_ADMIN"),
+    requireStepUp,
     createAdmin
 );
 
@@ -108,6 +125,7 @@ router.put(
     "/:id",
     protect,
     authorize("SUPER_ADMIN"),
+    requireStepUp,
     updateAdmin
 );
 
@@ -115,13 +133,23 @@ router.patch(
     "/:id/status",
     protect,
     authorize("SUPER_ADMIN"),
+    requireStepUp,
     updateAdminStatus
+);
+
+router.patch(
+    "/:id/password",
+    protect,
+    authorize("SUPER_ADMIN"),
+    requireStepUp,
+    setAdminPassword
 );
 
 router.delete(
     "/:id",
     protect,
     authorize("SUPER_ADMIN"),
+    requireStepUp,
     deleteAdmin
 );
 

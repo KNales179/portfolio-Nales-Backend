@@ -3,7 +3,11 @@ import Admin from "../models/Admin.js";
 import AuditLog from "../models/AuditLog.js";
 import AdminSession from "../models/AdminSession.js";
 
-import { verifyTwoFactorCode } from "../utils/twoFactor.js";
+import {
+    verifyTwoFactorCode,
+    signStepUpToken,
+    STEP_UP_TTL_SECONDS,
+} from "../utils/twoFactor.js";
 
 
 // ============================================================
@@ -390,6 +394,89 @@ export const completeFirstLogin = async (req, res) => {
 };
 
 // ============================================================
+// SUPER ADMIN - STEP-UP 2FA VERIFICATION
+// ============================================================
+//
+// Unlocks the admin-management area. A fresh TOTP code is
+// exchanged for a short-lived step-up token that the client
+// then sends with each management write.
+// ============================================================
+
+export const verifyStepUp = async (req, res) => {
+  try {
+    const code = String(req.body?.code ?? "")
+      .replace(/\s/g, "")
+      .trim();
+
+    const admin = await Admin.findById(req.user._id).select(
+      "+twoFactorSecret +twoFactorLastUsedStep"
+    );
+
+    if (!admin) {
+      return res.status(404).json({
+        success: false,
+        message: "Admin account not found",
+      });
+    }
+
+    if (!admin.twoFactorEnabled || !admin.twoFactorSecret) {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Enable two-factor authentication before managing admins.",
+      });
+    }
+
+    const verification = await verifyTwoFactorCode(admin, code);
+
+    if (!verification.valid) {
+      await AuditLog.create({
+        admin: admin._id,
+        action: "SECURITY_VERIFICATION_FAILED",
+        resource: "ADMIN",
+        resourceId: admin._id,
+        description:
+          "Step-up 2FA verification failed (admin management)",
+        ipAddress: req.ip,
+        userAgent: req.get("user-agent"),
+      });
+
+      return res.status(401).json({
+        success: false,
+        message: "Invalid authentication code.",
+      });
+    }
+
+    await AuditLog.create({
+      admin: admin._id,
+      action: "SECURITY_VERIFICATION_SUCCESS",
+      resource: "ADMIN",
+      resourceId: admin._id,
+      description:
+        "Step-up 2FA verification for admin management",
+      ipAddress: req.ip,
+      userAgent: req.get("user-agent"),
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        stepUpToken: signStepUpToken(admin._id),
+        expiresIn: STEP_UP_TTL_SECONDS,
+      },
+    });
+  } catch (error) {
+    console.error("Step-up verification error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Verification failed",
+    });
+  }
+};
+
+
+// ============================================================
 // SUPER ADMIN - GET ALL ADMINS
 // ============================================================
 
@@ -699,6 +786,82 @@ export const updateAdminStatus = async (req, res) => {
     });
   }
 };
+
+// ============================================================
+// SUPER ADMIN - SET ADMIN PASSWORD
+// ============================================================
+//
+// A super admin sets a new password for another admin. The
+// admin is forced to choose their own on next login, and every
+// existing session / token for that admin is invalidated.
+// ============================================================
+
+export const setAdminPassword = async (req, res) => {
+  try {
+    const { newPassword } = req.body;
+
+    if (!newPassword || newPassword.length < 8) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "New password must be at least 8 characters long",
+      });
+    }
+
+    if (req.params.id === req.user._id.toString()) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Use the security page to change your own password.",
+      });
+    }
+
+    const admin = await Admin.findById(req.params.id).select(
+      "+password"
+    );
+
+    if (!admin) {
+      return res.status(404).json({
+        success: false,
+        message: "Admin account not found",
+      });
+    }
+
+    admin.password = await bcrypt.hash(newPassword, 12);
+    admin.mustChangePassword = true;
+    admin.tokenVersion = (admin.tokenVersion || 0) + 1;
+    admin.failedLoginAttempts = 0;
+    admin.lockUntil = null;
+
+    await admin.save();
+
+    await revokeOtherSessions(admin._id, null);
+
+    await AuditLog.create({
+      admin: req.user._id,
+      action: "PASSWORD_CHANGE",
+      resource: "ADMIN",
+      resourceId: admin._id,
+      description: `Reset password for admin account: ${admin.username}`,
+      ipAddress: req.ip,
+      userAgent: req.get("user-agent"),
+    });
+
+    res.json({
+      success: true,
+      message:
+        "Password reset. The admin must set their own password on next login.",
+    });
+  } catch (error) {
+    console.error("Set admin password error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to set admin password",
+    });
+  }
+};
+
 
 // ============================================================
 // SUPER ADMIN - DELETE ADMIN
