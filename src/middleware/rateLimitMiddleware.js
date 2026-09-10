@@ -122,3 +122,29 @@ export const publicAnalyticsRateLimiter = rateLimit({
         message: "Too many requests.",
     },
 });
+
+// ============================================================
+// CONTACT FORM RATE LIMITER
+// ============================================================
+//
+// The public contact form now writes to the database, so a
+// bot loop could flood the inbox. A genuine visitor sends one
+// message; this allows a few (typos, follow-ups) then blocks.
+//
+// 5 submissions per hour per IP.
+// ============================================================
+
+export const contactRateLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+
+    max: 5,
+
+    standardHeaders: true,
+    legacyHeaders: false,
+
+    message: {
+        success: false,
+        message:
+            "You've sent several messages recently. Please try again later.",
+    },
+});
