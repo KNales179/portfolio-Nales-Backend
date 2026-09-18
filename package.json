@@ -12,7 +12,7 @@
   },
   "keywords": [],
   "author": "IBell",
-  "license": "ISC",
+  "license": "UNLICENSED",
   "type": "module",
   "dependencies": {
     "@getbrevo/brevo": "^6.0.3",
